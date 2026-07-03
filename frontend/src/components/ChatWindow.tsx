@@ -76,30 +76,91 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark }: Prop
   );
 }
 
+const SCRAMBLE_CHARS = "!<>-_\\/[]{}=+*^?#$%01";
+
+/** Cipher-decode effect: characters resolve left-to-right through random glyphs. */
+function useScramble(target: string, active: boolean, duration = 420): string {
+  const [display, setDisplay] = useState(active ? "" : target);
+
+  useEffect(() => {
+    if (!active) { setDisplay(target); return; }
+    let frame = 0;
+    const totalFrames = Math.round(duration / 28);
+    const resolveAt = target.split("").map((_, i) =>
+      Math.floor((i / Math.max(target.length, 1)) * totalFrames * 0.55) + totalFrames * 0.3
+    );
+    const interval = setInterval(() => {
+      frame++;
+      let out = "";
+      for (let i = 0; i < target.length; i++) {
+        const ch = target[i];
+        if (ch === " " || ch === '"') { out += ch; continue; }
+        out += frame >= resolveAt[i] ? ch : SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
+      }
+      setDisplay(out);
+      if (frame >= totalFrames) { setDisplay(target); clearInterval(interval); }
+    }, 28);
+    return () => clearInterval(interval);
+  }, [target, active, duration]);
+
+  return display;
+}
+
+/** Eased count-up from 0 to a real backend number -- grounds the "AI is working" beat in actual data. */
+function useCountUp(target: number, active: boolean, duration = 900): number {
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    if (!active || !target) { setValue(0); return; }
+    let start: number | null = null;
+    let raf: number;
+    const step = (ts: number) => {
+      if (start === null) start = ts;
+      const progress = Math.min((ts - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setValue(Math.round(eased * target));
+      if (progress < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, active, duration]);
+  return value;
+}
+
 /**
  * Agentic reasoning trace — the "watch the AI work" moment.
- * Sequential status lines reveal one at a time (not tied to real backend
- * events, since the SSE stream only emits text/coupons/done — this is a
- * plausible, personalized simulation of the search that gracefully
- * disappears the instant real content starts streaming in).
+ * Each line decodes in through a cipher-scramble effect (not a plain fade),
+ * and the "scanning" line counts up to the REAL live coupon/store totals
+ * fetched from /api/health -- not a fake number, actual backend state.
+ * Sequential reveal isn't tied to real SSE progress events (the stream only
+ * emits text/coupons/done) -- this is a personalized simulation that
+ * gracefully disappears the instant real content starts streaming in.
  */
 function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
-  const lines = useMemo(() => {
-    const trimmed = query.length > 42 ? query.slice(0, 42).trim() + "…" : query;
-    return [
-      trimmed ? `Reading "${trimmed}"` : "Reading your request",
-      "Scanning GrabOn's live coupon database",
-      "Filtering expired and duplicate codes",
-      "Ranking by discount and relevance",
-      "Assembling your picks",
-    ];
-  }, [query]);
+  const [stats, setStats] = useState<{ coupons: number; stores: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setStats({ coupons: d.coupons_with_codes, stores: d.stores }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const trimmed = query.length > 42 ? query.slice(0, 42).trim() + "…" : query;
+  const lineTemplates = useMemo(() => [
+    trimmed ? `Reading "${trimmed}"` : "Reading your request",
+    "__SCANNING__",
+    "Filtering expired and duplicate codes",
+    "Ranking by discount and relevance",
+    "Assembling your best picks",
+  ], [trimmed]);
 
   const [visibleCount, setVisibleCount] = useState(1);
 
   useEffect(() => {
     setVisibleCount(1);
-    const stepDelays = [550, 1000, 900, 850]; // gaps between lines 2..5
+    const stepDelays = [500, 1100, 850, 750];
     const timers: ReturnType<typeof setTimeout>[] = [];
     let elapsed = 0;
     stepDelays.forEach((d, i) => {
@@ -107,31 +168,79 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
       timers.push(setTimeout(() => setVisibleCount(i + 2), elapsed));
     });
     return () => timers.forEach(clearTimeout);
-  }, [lines]);
+  }, [lineTemplates]);
 
   const doneColor   = isDark ? "#55555A" : "#A6A399";
   const activeColor = isDark ? "#EDEDEC" : "#171614";
 
+  const scanIndex   = 1;
+  const scanActive  = visibleCount - 1 >= scanIndex;
+  const coupons     = useCountUp(stats?.coupons ?? 0, scanActive);
+  const stores      = useCountUp(stats?.stores ?? 0, scanActive);
+
   return (
-    <div className="flex gap-3 items-start">
+    <div className="relative flex gap-3 items-start overflow-hidden">
+      <div className="trace-sweep" />
       <CometRing />
       <div className="flex flex-col gap-1.5 font-mono text-[13px] pt-1">
-        {lines.slice(0, visibleCount).map((line, i) => {
+        {lineTemplates.slice(0, visibleCount).map((template, i) => {
           const isActive = i === visibleCount - 1;
+          const isLast   = i === lineTemplates.length - 1 && !isActive;
           return (
-            <div key={i} className="trace-line flex items-center gap-2.5">
-              <span
-                className={`shrink-0 w-1.5 h-1.5 rounded-full ${isActive ? "trace-dot" : ""}`}
-                style={{ background: isActive ? "var(--brand)" : "var(--success)" }}
-              />
-              <span style={{ color: isActive ? activeColor : doneColor }}>
-                {line}
-                {isActive && <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>}
-              </span>
-            </div>
+            <TraceLine
+              key={i}
+              template={template}
+              isActive={isActive}
+              settled={!isActive}
+              color={isActive ? activeColor : doneColor}
+              coupons={coupons}
+              stores={stores}
+              statsReady={!!stats}
+              justSettled={isLast}
+            />
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function TraceLine({
+  template, isActive, color, coupons, stores, statsReady,
+}: {
+  template: string; isActive: boolean; settled: boolean; color: string;
+  coupons: number; stores: number; statsReady: boolean; justSettled: boolean;
+}) {
+  const isScanLine = template === "__SCANNING__";
+
+  // Non-numeric lines are static strings -> safe to cipher-decode them.
+  const scrambled = useScramble(isScanLine ? "" : template, isActive && !isScanLine);
+
+  return (
+    <div className="trace-line flex items-center gap-2.5">
+      <span
+        className={`shrink-0 w-1.5 h-1.5 rounded-full ${isActive ? "trace-dot" : ""}`}
+        style={{ background: isActive ? "var(--brand)" : "var(--success)" }}
+      />
+      {isScanLine ? (
+        <span style={{ color }}>
+          Scanning{" "}
+          <span className="font-bold" style={{ color: "var(--brand)" }}>
+            {statsReady ? coupons.toLocaleString("en-IN") : "…"}
+          </span>{" "}
+          live codes across{" "}
+          <span className="font-bold" style={{ color: "var(--brand)" }}>
+            {statsReady ? stores.toLocaleString("en-IN") : "…"}
+          </span>{" "}
+          stores
+          {isActive && <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>}
+        </span>
+      ) : (
+        <span style={{ color }}>
+          {scrambled}
+          {isActive && <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>}
+        </span>
+      )}
     </div>
   );
 }

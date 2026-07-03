@@ -1,5 +1,5 @@
 import { Message } from "../types";
-import { CouponCard } from "./CouponCard";
+import { CouponManifest } from "./CouponCard";
 import { CouponIcon } from "./CouponIcon";
 
 interface Props {
@@ -42,11 +42,7 @@ export function MessageBubble({ message, isDark }: Props) {
           </div>
         )}
         {message.coupons && message.coupons.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {message.coupons.map(c => (
-              <CouponCard key={c.couponId} coupon={c} isDark={isDark} />
-            ))}
-          </div>
+          <CouponManifest coupons={message.coupons} isDark={isDark} />
         )}
       </div>
     </div>

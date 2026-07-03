@@ -93,6 +93,21 @@ textarea { field-sizing: content; }
   0%, 100% { opacity: 0.25; transform: scale(0.85); }
   50%      { opacity: 1;    transform: scale(1); }
 }
+
+/* One-shot diagonal glow sweep behind the trace block on mount -- a literal
+   "scan pass" over the text, layered on top of the per-line decode effect. */
+@keyframes traceSweep {
+  0%   { transform: translateX(-30%); opacity: 0; }
+  15%  { opacity: 0.5; }
+  100% { transform: translateX(130%); opacity: 0; }
+}
+.trace-sweep {
+  position: absolute;
+  inset: -8px -20px;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(210,230,0,0.10) 45%, transparent 60%);
+  animation: traceSweep 1.6s ease-in-out infinite;
+}
 .trace-dot { animation: traceDotPulse 1.1s ease-in-out infinite; }
 
 @keyframes traceCursorBlink {

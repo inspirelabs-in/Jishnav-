@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Coupon } from "../types";
 
 interface Props {
-  coupon: Coupon;
+  coupons: Coupon[];
   isDark: boolean;
 }
 
@@ -74,7 +74,36 @@ function maskCode(code: string): string {
 
 type RevealState = "sealed" | "revealing" | "revealed";
 
-export function CouponCard({ coupon, isDark }: Props) {
+/**
+ * No individual cards -- one consolidated "manifest" panel holding every
+ * pick as a row, separated by hairline dashed dividers (the dividers alone
+ * carry the ticket-tear-off motif; no per-item box/shadow/border needed).
+ * Reads as one AI-assembled readout, not a grid of app widgets.
+ */
+export function CouponManifest({ coupons, isDark }: Props) {
+  const panelBg     = isDark ? "bg-[#141416] border-[#262629]" : "bg-white border-[#E4E2DD]";
+  const dividerCol  = isDark ? "border-[#262629]" : "border-[#E4E2DD]";
+
+  return (
+    <div className={`card-resolve rounded-2xl border overflow-hidden ${panelBg}`}>
+      {coupons.map((c, i) => (
+        <ManifestRow
+          key={c.couponId}
+          coupon={c}
+          isDark={isDark}
+          bordered={i < coupons.length - 1}
+          dividerCol={dividerCol}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ManifestRow({
+  coupon, isDark, bordered, dividerCol,
+}: {
+  coupon: Coupon; isDark: boolean; bordered: boolean; dividerCol: string;
+}) {
   const [state, setState]   = useState<RevealState>("sealed");
   const [copied, setCopied] = useState(false);
   const { buttonRef, burst } = useConfetti();
@@ -103,114 +132,92 @@ export function CouponCard({ coupon, isDark }: Props) {
     });
   };
 
-  const cardBase = isDark ? "bg-[#141416] border-[#262629]" : "bg-white border-[#E4E2DD]";
-  const divider  = isDark ? "border-[#262629]" : "border-[#E4E2DD]";
-  const stubBg   = isDark ? "bg-[#0B0B0C]" : "bg-[#F7F6F3]";
-
   return (
-    <div className={`coupon-card-outer card-resolve relative border rounded-2xl p-3.5 w-full overflow-hidden flex flex-col ${cardBase}`}>
-
-      {/* Redeemed stamp — sits inside the card's own bounds, top corner is clipped by overflow-hidden otherwise */}
-      {state === "revealed" && (
-        <div
-          className="stamp-in absolute top-2 right-2 z-20 flex items-center justify-center w-7 h-7 rounded-full border-2 pointer-events-none"
-          style={{
-            borderColor: "var(--gold)",
-            color: "var(--gold)",
-            background: isDark ? "#141416" : "#FFFFFF",
-            transform: "rotate(-10deg)",
-          }}
-          title="Redeemed"
-        >
-          <CheckIcon />
-        </div>
-      )}
-
-      {/* Item name — the only text on the card besides the code itself */}
-      <div className="mb-3 flex items-center gap-1.5">
+    <div
+      className={`flex items-center gap-3 px-4 py-3.5 ${bordered ? `border-b border-dashed ${dividerCol}` : ""}`}
+    >
+      {/* Item name */}
+      <div className="flex items-center gap-2 shrink-0 min-w-[84px] max-w-[38%]">
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "var(--brand)" }} />
-        <span className="text-[12px] font-bold uppercase tracking-[0.14em] font-mono" style={{ color: "var(--brand)" }}>
+        <span className="text-[12px] font-bold uppercase tracking-[0.12em] font-mono truncate" style={{ color: "var(--brand)" }}>
           {coupon.storeName}
         </span>
       </div>
 
-      <div className={`mt-auto border-t border-dashed mb-2.5 ${divider}`} />
-
-      {/* ── Code stub: sealed / revealing / revealed ── */}
-      {hasCode ? (
-        state === "revealed" ? (
-          <div className="relative flex items-center gap-2">
-            <div className="relative flex-1 rounded-xl overflow-hidden border border-dashed" style={{ borderColor: "var(--gold)" }}>
+      {/* Code stub: sealed / revealing / revealed */}
+      <div className="flex-1 flex items-center justify-end gap-2 min-w-0">
+        {hasCode ? (
+          state === "revealed" ? (
+            <>
+              <span
+                className="stamp-in shrink-0 flex items-center justify-center w-6 h-6 rounded-full border-2"
+                style={{ borderColor: "var(--gold)", color: "var(--gold)", transform: "rotate(-10deg)" }}
+                title="Redeemed"
+              >
+                <CheckIcon />
+              </span>
               <code
-                className={`block text-[11px] font-mono font-extrabold tracking-[0.18em] rounded-xl px-3 py-2 text-center ${isDark ? "bg-[#1C1C1F]" : "bg-[#FBF3E4]"}`}
-                style={{ color: "var(--gold-deep)" }}
+                className="font-mono font-extrabold tracking-[0.16em] text-[12px] px-3 py-1.5 rounded-lg border border-dashed truncate"
+                style={{ color: "var(--gold-deep)", borderColor: "var(--gold)" }}
               >
                 {coupon.couponCode.toUpperCase()}
               </code>
-            </div>
+              <button
+                ref={buttonRef}
+                onClick={handleCopy}
+                className="shrink-0 text-[11px] font-bold px-3 py-1.5 rounded-lg border-none cursor-pointer transition-all font-mono"
+                style={{
+                  background: copied ? "var(--success)" : "var(--brand)",
+                  color: copied ? "#fff" : "var(--brand-ink)",
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </>
+          ) : (
             <button
-              ref={buttonRef}
-              onClick={handleCopy}
-              className="shrink-0 text-[12px] font-bold px-4 py-2 rounded-xl border-none cursor-pointer transition-all font-mono"
-              style={{
-                background: copied ? "var(--success)" : "var(--brand)",
-                color: copied ? "#fff" : "var(--brand-ink)",
-              }}
+              onClick={handleReveal}
+              disabled={state === "revealing"}
+              className="relative flex items-center gap-2 rounded-lg px-1"
+              style={{ cursor: state === "revealing" ? "default" : "pointer" }}
             >
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={handleReveal}
-            disabled={state === "revealing"}
-            className="relative w-full flex items-center gap-2 rounded-xl border border-dashed px-3 py-2.5 group"
-            style={{ borderColor: isDark ? "#3a3a3f" : "#d8d4cb", cursor: state === "revealing" ? "default" : "pointer" }}
-          >
-            {/* perforation notches */}
-            <span className={`stub-notch -left-[7px] ${stubBg}`} />
-            <span className={`stub-notch -right-[7px] ${stubBg}`} />
-
-            {state === "revealing" && <span className="unlock-flash" />}
-
-            <div className={`flex-1 rounded-lg px-2 py-1.5 text-center ${state === "sealed" ? "redacted-strip" : ""}`}>
+              {state === "revealing" && <span className="unlock-flash" />}
               <code
-                className="block text-[12px] font-mono font-extrabold tracking-[0.22em]"
+                className={`font-mono font-extrabold tracking-[0.18em] text-[12px] px-3 py-1.5 rounded-lg ${state === "sealed" ? "redacted-strip" : ""}`}
                 style={{ color: state === "revealing" ? "var(--gold)" : (isDark ? "#5a5a60" : "#b9b5aa") }}
               >
                 {state === "revealing" ? coupon.couponCode.toUpperCase() : maskCode(coupon.couponCode)}
               </code>
-            </div>
-
-            <span
-              className="shrink-0 text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg transition-colors"
-              style={{
-                color: state === "revealing" ? "var(--gold)" : "var(--brand-ink)",
-                background: state === "revealing" ? "transparent" : "var(--brand)",
-              }}
-            >
-              {state === "revealing" ? "Opening…" : "Reveal"}
-            </span>
-          </button>
-        )
-      ) : (
-        <a
-          href={coupon.couponUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex-1 text-[12px] font-bold text-center px-4 py-2 rounded-xl transition-colors font-mono"
-          style={{ background: "var(--brand)", color: "var(--brand-ink)" }}
-        >
-          Visit Deal →
-        </a>
-      )}
+              <span
+                className="shrink-0 text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg transition-colors"
+                style={{
+                  color: state === "revealing" ? "var(--gold)" : "var(--brand-ink)",
+                  background: state === "revealing" ? "transparent" : "var(--brand)",
+                }}
+              >
+                {state === "revealing" ? "Opening…" : "Reveal"}
+              </span>
+            </button>
+          )
+        ) : (
+          <a
+            href={coupon.couponUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[12px] font-bold px-3 py-1.5 rounded-lg transition-colors font-mono"
+            style={{ background: "var(--brand)", color: "var(--brand-ink)" }}
+          >
+            Visit Deal →
+          </a>
+        )}
+      </div>
     </div>
   );
 }
 
 function CheckIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="20 6 9 17 4 12" />
     </svg>
   );

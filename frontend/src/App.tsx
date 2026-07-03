@@ -10,7 +10,7 @@ export default function App() {
     deleteHistory, renameHistory,
   } = useChat();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(false);
 
   return (
     <div className={`flex h-screen overflow-hidden relative ${isDark ? "" : "theme-light"}`} style={{ background: "var(--bg-app)" }}>

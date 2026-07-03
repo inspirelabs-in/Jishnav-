@@ -1,0 +1,24 @@
+# Validity urgency thresholds (days)
+validity:
+  expires_today_days: 0
+  expires_soon_days: 3
+  expires_week_days: 7
+
+# Embedding search
+embedding:
+  confident_match_threshold: 0.5   # below this on all matches → trigger narrowing (Type C)
+
+# Conversation
+conversation:
+  max_history_turns: 20
+  session_timeout_minutes: 30
+
+# Retrieval
+retrieval:
+  coupon_limit: 30
+  cache_refresh_hours: 6
+
+# LLM context budget (approximate tokens)
+llm:
+  max_prompt_tokens: 3000
+  min_history_turns_to_keep: 2

@@ -1,0 +1,1159 @@
+"""
+GrabGPT FastAPI backend — main entry point.
+"""
+
+import json
+import logging
+import sys
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+import config
+import cache
+import store_index
+import vertical_classifier
+import conversation as conv
+import query_router
+import retriever
+import responder
+import external_search
+import llm_logger
+from llm.factory import get_llm
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger(__name__)
+
+app = FastAPI(title="GrabGPT API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins     = config.CORS_ALLOWED_ORIGINS,
+    allow_credentials = True,
+    allow_methods     = ["*"],
+    allow_headers     = ["*"],
+)
+
+
+# ── Startup ────────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup() -> None:
+    log.info("Starting GrabGPT backend...")
+    cache.build()
+    store_index.build()
+    vertical_classifier.build()
+    conv.start_eviction_loop()
+    cache.start_refresh_loop()
+    log.info("GrabGPT backend ready.")
+
+
+# ── Request / Response models ──────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+
+
+# ── SSE helpers ────────────────────────────────────────────────────────────────
+
+def _sse(event: str, data: str) -> str:
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _sse_text(chunk: str) -> str:
+    # Hard-strip em/en dashes regardless of what the LLM outputs
+    chunk = chunk.replace("—", " - ").replace("–", " - ")
+    return _sse("text", json.dumps(chunk))
+
+
+def _sse_coupons(coupons: list[dict]) -> str:
+    import decimal
+    def _default(obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)
+        raise TypeError(f"Not serializable: {type(obj)}")
+    return _sse("coupons", json.dumps(coupons, default=_default))
+
+
+def _sse_meta(data: dict) -> str:
+    return _sse("meta", json.dumps(data))
+
+
+def _sse_error(msg: str) -> str:
+    return _sse("error", json.dumps({"message": msg}))
+
+
+def _sse_done() -> str:
+    return _sse("done", "{}")
+
+
+async def _stream_fallback_response(user_message: str, candidate_coupons: str | None = "none"):
+    """Stream a reply using fallback_respond.txt — handles no-results, web search blocked, and irrelevant queries.
+
+    Pass candidate_coupons=None for explicit web-search-block calls so the LLM
+    doesn't see [CANDIDATE COUPONS: none] and fire the wrong rule.
+    """
+    system = (config.PROMPTS_DIR / "fallback_respond.txt").read_text(encoding="utf-8")
+    llm = get_llm()
+    content = (
+        f"[CANDIDATE COUPONS: {candidate_coupons}]\n{user_message}"
+        if candidate_coupons is not None
+        else user_message
+    )
+    async for chunk in llm.generate(
+        system_prompt = system,
+        messages      = [{"role": "user", "content": content}],
+        temperature   = 0.3,
+        max_tokens    = 80,
+    ):
+        yield chunk
+    llm_logger.log_call(
+        model         = llm.model,
+        prompt_file   = "fallback_respond.txt",
+        function_name = "_stream_fallback_response",
+        input_tokens  = llm.last_usage.get("input_tokens", 0),
+        output_tokens = llm.last_usage.get("output_tokens", 0),
+    )
+
+
+# ── Chat endpoint ──────────────────────────────────────────────────────────────
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    session_id = req.session_id
+    message    = req.message.strip()
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    async def generate():
+        try:
+            route = await query_router.route(message, session_id)
+            log.info("Route: type=%s store_ids=%s vertical_ids=%s pending=%r ambiguous=%s expl_web=%s expl_related=%s corrected=%r",
+                     route.query_type, route.store_ids, route.vertical_ids,
+                     route.pending_offer, route.is_ambiguous,
+                     route.is_explicit_web, route.is_explicit_related,
+                     route.corrected_query)
+
+            # Shared across all paths that fetch coupons
+            limit = route.requested_count or config.COUPON_RETRIEVAL_LIMIT
+            _coupons_pre_filtered = False  # True when coupons already verified by filter_brand_coupons
+
+            # ── System info question (what categories, what can you do, etc.) ──
+            if route.query_type == "INFO":
+                stats       = cache.get_stats()
+                verticals   = vertical_classifier.get_verticals_list()
+                cat_names   = sorted({v["name"] for v in verticals})
+                store_names = cache.get_all_store_names()
+                # Pass first 80 store names as a representative sample — enough for
+                # the LLM to cite well-known ones without flooding the prompt
+                sample_stores = store_names[:80]
+
+                llm = get_llm()
+                full_text = ""
+                async for chunk in llm.generate(
+                    system_prompt=(
+                        f"You are GrabGPT, GrabOn.in's coupon assistant. "
+                        f"Answer the user's question about what you offer. "
+                        f"Use only the data below — do not invent stores or categories.\n\n"
+                        f"Stats: {stats['coupons_with_codes']} active coupon codes across "
+                        f"{stats['stores']} stores and {stats['categories']} categories.\n\n"
+                        f"All categories: {', '.join(cat_names)}.\n\n"
+                        f"Sample of brands/stores (first 80 of {stats['stores']} total): "
+                        f"{', '.join(sample_stores)}.\n\n"
+                        f"Rules:\n"
+                        f"- If asked about brands or stores: name a few well-known ones from the sample, "
+                        f"mention the total count, and say there are many more.\n"
+                        f"- If asked about categories: list them all from the categories data above.\n"
+                        f"- If asked what you can do: give a warm 2-3 sentence overview.\n"
+                        f"- Never use em dashes. Keep the response concise and friendly."
+                    ),
+                    messages=[{"role": "user", "content": message}],
+                    temperature=0.3,
+                    max_tokens=300,
+                ):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+                llm_logger.log_call(
+                    model         = llm.model,
+                    prompt_file   = "inline: system_info",
+                    function_name = "chat/INFO handler",
+                    input_tokens  = llm.last_usage.get("input_tokens", 0),
+                    output_tokens = llm.last_usage.get("output_tokens", 0),
+                    session_id    = session_id,
+                )
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                yield _sse_done()
+                return
+
+            # ── Non-coupon question ────────────────────────────────────────────
+            if route.is_non_coupon:
+                full_text = ""
+                async for chunk in _stream_fallback_response(message, candidate_coupons=None):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                yield _sse_done()
+                return
+
+            # ── User said "yes" but two options were on the table → clarify ───
+            if route.is_ambiguous:
+                category = _extract_web_category(route.pending_offer)
+                full_text = ""
+                async for chunk in responder.stream_clarification_response(category):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(
+                    role="assistant", content=full_text,
+                    pending_offer=route.pending_offer,  # keep the same offer alive
+                ))
+                yield _sse_done()
+                return
+
+            # ── User explicitly said "search web" ─────────────────────────────
+            if route.is_explicit_web and route.pending_offer:
+                category = _extract_web_category(route.pending_offer)
+
+                # Before hitting SearXNG: try CouponName LIKE search in DB.
+                # Catches brands not in the store index (e.g. "Vivo coupon codes"
+                # auto-routed to web search because LLM didn't extract store_names).
+                if not route.store_ids:
+                    _like_hits = await retriever.get_coupons_by_brand_name(category)
+                    log.info("is_explicit_web LIKE fallback for %r: %d hits", category, len(_like_hits))
+                    if _like_hits:
+                        _verified = await responder.filter_brand_coupons(category, _like_hits)
+                        log.info("is_explicit_web LIKE after LLM filter: %d kept", len(_verified))
+                        if _verified:
+                            full_text = ""
+                            async for chunk in responder.stream_coupon_response(
+                                user_message          = message,
+                                session_id            = session_id,
+                                coupons               = _verified,
+                                skip_relevance_filter = True,
+                            ):
+                                if isinstance(chunk, str):
+                                    yield _sse_text(chunk)
+                                    full_text += chunk
+                                else:
+                                    yield _sse_coupons(chunk["data"])
+                            conv.add_message(session_id, conv.Message(role="user", content=message))
+                            conv.add_message(session_id, conv.Message(
+                                role="assistant", content=full_text,
+                                coupon_count=len(_verified),
+                            ))
+                            yield _sse_done()
+                            return
+
+                if not config.WEB_SEARCH_ENABLED:
+                    brand = route.brand_name_hint or category
+                    full_text = f"I don't have active coupon codes for {brand} on GrabOn right now. Is there another store or category I can help you with?"
+                    yield _sse_text(full_text)
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                    yield _sse_done()
+                    return
+
+                results  = await external_search.search_web(category)
+                full_text = ""
+                async for chunk in responder.stream_web_results_response(
+                    user_message = message,
+                    session_id   = session_id,
+                    web_results  = results,
+                    category     = category,
+                ):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                yield _sse_done()
+                return
+
+            # ── User chose the GrabOn related option ──────────────────────────
+            if route.is_explicit_related and route.pending_offer:
+                related_vids = _extract_related_vids(route.pending_offer)
+                coupons, _ = (await retriever.get_coupons_for_verticals(related_vids)) if related_vids else ([], [])
+                if not coupons:
+                    yield _sse_text("Sorry, I couldn't find active coupons for those categories either.")
+                    yield _sse_done()
+                    return
+                full_text = ""
+                async for chunk in responder.stream_coupon_response(
+                    user_message = message,
+                    session_id   = session_id,
+                    coupons      = coupons,
+                ):
+                    if isinstance(chunk, str):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    else:
+                        yield _sse_coupons(chunk["data"])
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(
+                    role="assistant", content=full_text,
+                    matched_vertical_ids=related_vids,
+                    coupon_count=len(coupons),
+                ))
+                yield _sse_done()
+                return
+
+            # ── User affirmed a previous simple offer ──────────────────────────
+            if route.is_affirmation and route.pending_offer:
+
+                # User said yes to "want general flight/hotel deals?" offer
+                if route.pending_offer.startswith("general_fallback:"):
+                    gen_vids = [int(v) for v in route.pending_offer[17:].split(",") if v]
+                    per = max(3, limit // max(1, len(gen_vids)))
+                    gen_coupons: list[dict] = []
+                    for gvid in gen_vids:
+                        c, _ = await retriever.get_coupons_for_verticals([gvid], limit=per)
+                        gen_coupons.extend(c)
+                    gen_coupons = gen_coupons[:limit]
+                    if not gen_coupons:
+                        reply = "No active coupons found for those categories right now."
+                        yield _sse_text(reply)
+                        conv.add_message(session_id, conv.Message(role="user", content=message))
+                        conv.add_message(session_id, conv.Message(role="assistant", content=reply))
+                        yield _sse_done()
+                        return
+                    # Write the intro text directly using the category names we know —
+                    # do NOT call stream_coupon_response here because it only reads the
+                    # top-3 stores for its summary and would say "hotel deals" even when
+                    # food coupons are also included.
+                    _fb_vnames  = {v["id"]: v["name"] for v in vertical_classifier.get_verticals_list()}
+                    gen_names   = [_fb_vnames.get(v, str(v)) for v in gen_vids if _fb_vnames.get(v)]
+                    intro       = f"Here are the general {' and '.join(gen_names)} deals:"
+                    yield _sse_text(intro)
+                    yield _sse_coupons(responder.serialise_coupons(gen_coupons))
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=intro,
+                        matched_vertical_ids=gen_vids,
+                        coupon_count=len(gen_coupons),
+                    ))
+                    yield _sse_done()
+                    return
+
+                if route.pending_offer.startswith("web:"):
+                    if not config.WEB_SEARCH_ENABLED:
+                        full_text = ""
+                        async for chunk in _stream_fallback_response(message, candidate_coupons=None):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        conv.add_message(session_id, conv.Message(role="user", content=message))
+                        conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                        yield _sse_done()
+                        return
+                    category = route.pending_offer[4:]
+                    results  = await external_search.search_web(category)
+                    full_text = ""
+                    async for chunk in responder.stream_web_results_response(
+                        user_message = message,
+                        session_id   = session_id,
+                        web_results  = results,
+                        category     = category,
+                    ):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                    yield _sse_done()
+                    return
+
+                # Re-fetch DB coupons from prior context
+                # Special case: user said yes to new-user fallback offer
+                if route.pending_offer.startswith("new_user_fallback:"):
+                    parts     = route.pending_offer.split("|")
+                    sids_part = parts[0].replace("new_user_fallback:", "")
+                    vids_part = parts[1].replace("vids:", "") if len(parts) > 1 else ""
+                    fb_sids   = [int(x) for x in sids_part.split(",") if x]
+                    fb_vids   = [int(x) for x in vids_part.split(",") if x]
+                    if fb_sids:
+                        coupons = await retriever.get_coupons_for_stores(fb_sids, limit=limit)
+                        # Pick the store name that appears in the original user query (not blindly first)
+                        # route.corrected_query carries the original store query even during affirmation
+                        query_lower = (route.corrected_query or message).lower()
+                        fb_store_name = next(
+                            (cache.get_store_name(sid) for sid in fb_sids
+                             if cache.get_store_name(sid) and cache.get_store_name(sid).lower() in query_lower),
+                            None,
+                        ) or next(
+                            (cache.get_store_name(sid) for sid in fb_sids if cache.get_store_name(sid)),
+                            None,
+                        )
+                    elif fb_vids:
+                        coupons, _ = await retriever.get_coupons_for_verticals(fb_vids, limit=limit)
+                        fb_store_name = None
+                    else:
+                        coupons = []
+                        fb_store_name = None
+
+                    if not coupons:
+                        yield _sse_text("Sorry, I couldn't find any active offers right now.")
+                        yield _sse_done()
+                        return
+
+                    # Use LLM to generate the response but reframe the message so it
+                    # doesn't mention "first order" — tell the LLM it's a general offer query
+                    label = fb_store_name or "these"
+                    reframed = f"Show me the best active {label} coupons"
+                    full_text = ""
+                    async for chunk in responder.stream_coupon_response(
+                        user_message          = reframed,
+                        session_id            = session_id,
+                        coupons               = coupons,
+                        skip_relevance_filter = True,
+                    ):
+                        if isinstance(chunk, str):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        else:
+                            yield _sse_coupons(chunk["data"])
+
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=full_text,
+                        matched_vertical_ids=fb_vids,
+                        store_ids=fb_sids,
+                        coupon_count=len(coupons),
+                    ))
+                    yield _sse_done()
+                    return
+
+                elif route.store_ids:
+                    coupons = await retriever.get_coupons_for_stores(route.store_ids)
+                elif route.vertical_ids:
+                    coupons, _ = await retriever.get_coupons_for_verticals(route.vertical_ids)
+                else:
+                    coupons = []
+
+                if not coupons:
+                    yield _sse_text("I couldn't find active coupons for that right now.")
+                    yield _sse_done()
+                    return
+
+                full_text = ""
+                async for chunk in responder.stream_coupon_response(
+                    user_message = message,
+                    session_id   = session_id,
+                    coupons      = coupons,
+                ):
+                    if isinstance(chunk, str):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    else:
+                        yield _sse_coupons(chunk["data"])
+
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(
+                    role="assistant", content=full_text,
+                    matched_vertical_ids=route.vertical_ids,
+                    store_ids=route.store_ids,
+                    coupon_count=len(coupons),
+                ))
+                yield _sse_done()
+                return
+
+            # ── Affirmation with no pending context ───────────────────────────
+            if route.is_affirmation:
+                full_text = ""
+                async for chunk in _stream_fallback_response(message):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                yield _sse_done()
+                return
+
+            # ── User said no ───────────────────────────────────────────────────
+            if route.is_negation:
+                # If "no" follows a clarification question that had saved context,
+                # treat it as "no, don't clarify — just show me what you have"
+                _last = conv.last_assistant_message(session_id)
+                _ctx_sids = (_last.store_ids if _last else []) or []
+                _ctx_vids = (_last.matched_vertical_ids if _last else []) or []
+                if _last and _last.was_narrowing and (_ctx_sids or _ctx_vids):
+                    # Fall through to coupon retrieval with the saved context
+                    route.store_ids    = _ctx_sids
+                    route.vertical_ids = _ctx_vids
+                    # Continue — do NOT return here; falls through to retrieval below
+                else:
+                    reply = "No problem! What else can I help you find?"
+                    yield _sse_text(reply)
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(role="assistant", content=reply))
+                    yield _sse_done()
+                    return
+
+            # ── Type C: vague query — ask narrowing question ───────────────────
+            if route.query_type == "C":
+                full_text = ""
+                async for chunk in responder.stream_narrowing_question(
+                    clarification_question = route.clarification_question,
+                    user_message           = message,
+                    session_id             = session_id,
+                ):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                # Save any partial context so affirmation/negation follow-ups can recover it
+                conv.add_message(session_id, conv.Message(
+                    role="assistant", content=full_text,
+                    was_narrowing=True,
+                    store_ids=route.store_ids,
+                    matched_vertical_ids=route.vertical_ids,
+                    min_discount=route.min_discount,
+                ))
+                yield _sse_done()
+                return
+
+            # ── Retrieve coupons — copyable codes ONLY, never deal links ─────
+            min_discount = route.min_discount
+
+            # ── Location-aware path ───────────────────────────────────────────
+            # When the LLM detected per-vertical location context (e.g. "hotel in Mumbai",
+            # "flight from Hyderabad"), do a SQL LIKE search per vertical first.
+            # Verticals with 0 specific results become a "want general ones?" offer.
+            if route.location_keywords and route.vertical_ids and not route.store_ids:
+                _vname_map = {v["id"]: v["name"] for v in vertical_classifier.get_verticals_list()}
+                per_vid    = max(3, limit // max(1, len(route.vertical_ids)))
+
+                loc_coupons, no_specific_vids = await retriever.get_coupons_for_verticals_with_location(
+                    vertical_ids     = route.vertical_ids,
+                    location_keywords = route.location_keywords,
+                    min_discount     = min_discount,
+                    limit_per_vertical = per_vid,
+                )
+
+                no_specific_names = [_vname_map.get(v, str(v)) for v in no_specific_vids]
+                full_text = ""
+                pending   = ""
+
+                if loc_coupons and not no_specific_vids:
+                    # All verticals returned specific results — normal LLM response
+                    async for chunk in responder.stream_coupon_response(
+                        user_message = message,
+                        session_id   = session_id,
+                        coupons      = loc_coupons,
+                    ):
+                        if isinstance(chunk, str):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        else:
+                            yield _sse_coupons(chunk["data"])
+
+                elif loc_coupons and no_specific_vids:
+                    # Some verticals found, some didn't.
+                    # Do NOT call stream_coupon_response — the LLM text would contradict
+                    # the "no specific coupons" note. Write a clear fixed message instead.
+                    found_names = [_vname_map.get(v, "") for v in route.vertical_ids if v not in no_specific_vids and _vname_map.get(v)]
+                    names_str   = " and ".join(no_specific_names)
+                    found_str   = " and ".join(n for n in found_names if n) or "some categories"
+
+                    intro = f"Here are the {found_str} coupons I found for you:"
+                    yield _sse_text(intro)
+                    full_text += intro
+                    yield _sse_coupons(responder.serialise_coupons(loc_coupons))
+
+                    note = (
+                        f"\n\nNo specific {names_str} coupons were found for your location. "
+                        f"Would you like to see general {names_str} deals?"
+                    )
+                    yield _sse_text(note)
+                    full_text += note
+                    pending = f"general_fallback:{','.join(str(v) for v in no_specific_vids)}"
+
+                else:
+                    # Nothing found at all for any vertical
+                    names_str = " and ".join(no_specific_names) if no_specific_names else "those categories"
+                    note = (
+                        f"No specific {names_str} coupons were found for your location. "
+                        f"Would you like to see general {names_str} deals instead?"
+                    )
+                    yield _sse_text(note)
+                    full_text = note
+                    pending = f"general_fallback:{','.join(str(v) for v in (no_specific_vids or route.vertical_ids))}"
+
+                conv.add_message(session_id, conv.Message(role="user", content=message))
+                conv.add_message(session_id, conv.Message(
+                    role="assistant", content=full_text,
+                    matched_vertical_ids=route.vertical_ids,
+                    coupon_count=len(loc_coupons),
+                    pending_offer=pending,
+                ))
+                yield _sse_done()
+                return
+            # ── End location-aware path ───────────────────────────────────────
+
+            async def _fetch(store_ids=None, vertical_ids=None, min_disc=min_discount):
+                if store_ids:
+                    return (
+                        await retriever.get_coupons_for_stores(
+                            store_ids, limit=limit,
+                            for_existing_user=None, min_discount=min_disc,
+                        ),
+                        [(sid, cache.get_store_name(sid)) for sid in store_ids],
+                    )
+                # Multi-vertical: distribute limit evenly so each category gets slots
+                vids = vertical_ids or []
+                if len(vids) <= 1:
+                    return await retriever.get_coupons_for_verticals(
+                        vids, limit=limit,
+                        for_existing_user=None, min_discount=min_disc,
+                    )
+                per_vid = max(config.COUPON_PER_VERTICAL_MIN, limit // max(1, len(vids)))
+                effective_limit = per_vid * len(vids)
+                all_coupons: list[dict] = []
+                all_stores: list[tuple] = []
+                seen_sids: set[int] = set()
+                for vid in vids:
+                    c, s = await retriever.get_coupons_for_verticals(
+                        [vid], limit=per_vid,
+                        for_existing_user=None, min_discount=min_disc,
+                    )
+                    all_coupons.extend(c)
+                    for entry in s:
+                        if entry[0] not in seen_sids:
+                            seen_sids.add(entry[0])
+                            all_stores.append(entry)
+                return all_coupons[:effective_limit], all_stores
+
+            _empty_vids: list[int] = []   # verticals that returned 0 coupons
+
+            if route.store_ids and route.vertical_ids:
+                # User named a brand AND a category (e.g. "train coupons from MakeMyTrip").
+                # The DB splits some brands by category: "MakeMyTrip" → "MakeMyTrip Train".
+                # Check whether the matched store is already inside this vertical. If yes,
+                # fetch directly. If not, look for other stores in the vertical whose name
+                # starts with the same brand name (e.g. find "MakeMyTrip Train" for "train").
+                _vert_stores = cache.get_stores_for_verticals(route.vertical_ids)
+                _vert_sids   = {s[0] for s in _vert_stores}
+                _brand_sid   = route.store_ids[0]
+
+                if _brand_sid in _vert_sids:
+                    # Brand's own store is in this vertical — fetch directly, no intersection.
+                    coupons, stores_searched = await _fetch(store_ids=route.store_ids)
+                else:
+                    # Brand has separate per-category stores (like MakeMyTrip Train).
+                    # Find them by prefix-matching the brand name inside the vertical.
+                    _brand_raw    = (cache.get_store_name(_brand_sid) or "").lower()
+                    _brand_prefix = _brand_raw[:min(len(_brand_raw), 10)]
+                    _brand_vsids  = [
+                        s[0] for s in _vert_stores
+                        if _brand_prefix and _brand_prefix in (cache.get_store_name(s[0]) or "").lower()
+                    ]
+                    if _brand_vsids:
+                        coupons = await retriever.get_coupons_for_stores(
+                            _brand_vsids, limit=limit, min_discount=min_discount,
+                        )
+                        stores_searched = [(_sid, cache.get_store_name(_sid)) for _sid in _brand_vsids]
+                    else:
+                        # No brand-specific vertical stores found — use brand's own store.
+                        # NEVER fall back to the full vertical here: user named a brand,
+                        # so showing other brands' coupons is wrong.
+                        coupons, stores_searched = await _fetch(store_ids=route.store_ids)
+            elif route.store_ids:
+                coupons, stores_searched = await _fetch(store_ids=route.store_ids)
+                if not coupons and route.vertical_ids:
+                    coupons, stores_searched = await _fetch(vertical_ids=route.vertical_ids)
+            else:
+                if len(route.vertical_ids) <= 1:
+                    coupons, stores_searched = await _fetch(vertical_ids=route.vertical_ids)
+                else:
+                    # Per-vertical fetch — track which categories returned nothing
+                    per_vid = max(config.COUPON_PER_VERTICAL_MIN, limit // max(1, len(route.vertical_ids)))
+                    coupons = []
+                    stores_searched = []
+                    _seen_sids: set[int] = set()
+                    for _vid in route.vertical_ids:
+                        _vc, _vs = await retriever.get_coupons_for_verticals(
+                            [_vid], limit=per_vid,
+                            for_existing_user=None, min_discount=min_discount,
+                        )
+                        if _vc:
+                            coupons.extend(_vc)
+                            for _entry in _vs:
+                                if _entry[0] not in _seen_sids:
+                                    _seen_sids.add(_entry[0])
+                                    stores_searched.append(_entry)
+                        else:
+                            _empty_vids.append(_vid)
+
+            # ── Brand-name filter ─────────────────────────────────────────────
+            # User explicitly named a brand (e.g. "Apple") that isn't in our store
+            # index. We fetched the full vertical (Mobiles) but must not show other
+            # brands (OPPO, Samsung). Filter coupons whose StoreName or CouponName
+            # contains the brand. If nothing matches, offer web search instead.
+            if route.brand_name_hint and coupons:
+                # Split into tokens so "HP Omen" matches "HP Shopping" (via "hp") and
+                # "Omen 16-ap0181ax" (via "omen") instead of looking for "hp omen" as
+                # a combined substring which never appears in either field.
+                _bh_tokens = [t for t in route.brand_name_hint.lower().split() if t]
+                _brand_matches = [
+                    c for c in coupons
+                    if any(
+                        tok in (c.get("StoreName") or "").lower()
+                        or tok in (c.get("CouponName") or "").lower()
+                        for tok in _bh_tokens
+                    )
+                ]
+                if not _brand_matches:
+                    # Vertical fetch didn't surface this brand — try LIKE fallback per token.
+                    # "HP Omen" → try LIKE '%HP%' and LIKE '%Omen%' separately.
+                    _like_hits = []
+                    for _tok in [t for t in route.brand_name_hint.split() if len(t) >= 2]:
+                        _tok_hits = await retriever.get_coupons_by_brand_name(_tok)
+                        _like_hits.extend(_tok_hits)
+                    if _like_hits:
+                        _brand_matches = await responder.filter_brand_coupons(
+                            route.brand_name_hint, _like_hits
+                        )
+
+                if _brand_matches:
+                    coupons = _brand_matches
+                    _coupons_pre_filtered = True
+                else:
+                    _bh_display = route.brand_name_hint
+                    if not config.WEB_SEARCH_ENABLED:
+                        full_text = ""
+                        async for chunk in _stream_fallback_response(message):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        conv.add_message(session_id, conv.Message(role="user", content=message))
+                        conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                        yield _sse_done()
+                        return
+                    _note = (
+                        f"We don't have {_bh_display}-specific coupons on GrabOn right now. "
+                        f"Would you like me to search the web for {_bh_display} coupon codes?"
+                    )
+                    yield _sse_text(_note)
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=_note,
+                        pending_offer=f"web:{route.corrected_query}",
+                    ))
+                    yield _sse_done()
+                    return
+
+            # Brand named but vertical fetch found nothing — try LIKE per token.
+            # e.g. "HP Omen" → vertical=Electronics returned empty, try LIKE '%HP%' and LIKE '%Omen%'
+            if route.brand_name_hint and not coupons:
+                _like_hits = []
+                for _tok in [t for t in route.brand_name_hint.split() if len(t) >= 2]:
+                    _tok_hits = await retriever.get_coupons_by_brand_name(_tok)
+                    _like_hits.extend(_tok_hits)
+                if _like_hits:
+                    _filtered = await responder.filter_brand_coupons(route.brand_name_hint, _like_hits)
+                    if _filtered:
+                        coupons = _filtered
+                        _coupons_pre_filtered = True
+
+            # If previous offer was new_user_fallback and user is continuing that flow,
+            # skip the new-user check entirely — just show the general coupons
+            last_asst = conv.last_assistant_message(session_id)
+            _prev_pending = last_asst.pending_offer if last_asst else ""
+            if _prev_pending.startswith("new_user_fallback:"):
+                # User said something after the offer — treat as "show me those"
+                # coupons are already fetched without new_user filter — stream them directly
+                pass  # fall through to stream_coupon_response below
+
+            # If user asked for new-user / first-order coupons:
+            # keyword-filter by CouponName — ForExistingUser=0 in DB means "all users", not "new users only"
+            elif route.is_new_user and coupons:
+                _NEW_USER_KW = {
+                    "new user", "new customer", "first order", "first time",
+                    "first booking", "first purchase", "first ride", "first trip",
+                    "welcome", "signup", "sign up", "register",
+                }
+                specific = [
+                    c for c in coupons
+                    if any(kw in (c.get("CouponName") or "").lower() for kw in _NEW_USER_KW)
+                ]
+                if specific:
+                    # Found first-timer coupons — show only those
+                    coupons = specific
+                else:
+                    # No first-timer specific coupons — ask before showing general ones
+                    category = _infer_category(message, route)
+                    pending  = (
+                        f"new_user_fallback:{','.join(str(i) for i in route.store_ids)}"
+                        f"|vids:{','.join(str(v) for v in route.vertical_ids)}"
+                    )
+                    msg = (
+                        f"There are no first-timer specific coupons for {category} right now, "
+                        f"but there are {len(coupons)} active {category} offers available. "
+                        f"Would you like to see those?"
+                    )
+                    yield _sse_text(msg)
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=msg,
+                        pending_offer=pending,
+                        store_ids=route.store_ids,
+                        matched_vertical_ids=route.vertical_ids,
+                    ))
+                    yield _sse_done()
+                    return
+
+            # If min_discount filter returned nothing, retry without it and tell user
+            discount_fallback_msg = ""
+            if not coupons and min_discount:
+                if route.store_ids:
+                    coupons, stores_searched = await _fetch(store_ids=route.store_ids, min_disc=None)
+                else:
+                    coupons, stores_searched = await _fetch(vertical_ids=route.vertical_ids, min_disc=None)
+                if coupons:
+                    best = max((c.get("Discount") or 0) for c in coupons)
+                    discount_fallback_msg = (
+                        f"We don't have {int(min_discount)}% off codes right now, "
+                        f"but here are the best available (up to {int(best)}% off):"
+                    )
+
+            log.info("Retrieved %d coupons for store_ids=%s vertical_ids=%s",
+                     len(coupons), route.store_ids, route.vertical_ids)
+
+            # ── No results → for store queries, offer other active store coupons ─
+            if not coupons and route.store_ids:
+                # Check if the store has ANY active coded coupons (ignore today-specific filters)
+                fallback_coupons = await retriever.get_coupons_for_stores(
+                    route.store_ids, limit=limit, for_existing_user=None, min_discount=None
+                )
+                if not fallback_coupons:
+                    # Store exists in index but has 0 coupons — try CouponName LIKE fallback.
+                    # Use the LLM-extracted name (e.g. "Vivo") not the DB name (e.g. "Vivo India")
+                    # so the LIKE pattern matches coupon names correctly.
+                    _store_brand = (
+                        route.store_query_names[0] if route.store_query_names
+                        else cache.get_store_name(route.store_ids[0]) or ""
+                    )
+                    if _store_brand:
+                        _like_hits = await retriever.get_coupons_by_brand_name(_store_brand)
+                        log.info("Brand LIKE fallback for %r: %d hits", _store_brand, len(_like_hits))
+                        if _like_hits:
+                            _verified = await responder.filter_brand_coupons(_store_brand, _like_hits)
+                            log.info("Brand LIKE fallback after LLM filter: %d kept", len(_verified))
+                            if _verified:
+                                coupons = _verified
+                                _coupons_pre_filtered = True
+                if fallback_coupons:
+                    store_name = cache.get_store_name(route.store_ids[0]) or "this store"
+                    fallback_msg = (
+                        f"No new coupons matching exactly what you asked for, "
+                        f"but {store_name} has {len(fallback_coupons)} active coupon codes available. "
+                        f"Here are the best ones:"
+                    )
+                    yield _sse_text(fallback_msg + "\n\n")
+                    full_text = fallback_msg + "\n\n"
+                    async for chunk in responder.stream_coupon_response(
+                        user_message = message,
+                        session_id   = session_id,
+                        coupons      = fallback_coupons,
+                    ):
+                        if isinstance(chunk, str):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        else:
+                            yield _sse_coupons(chunk["data"])
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=full_text,
+                        store_ids=route.store_ids,
+                        coupon_count=len(fallback_coupons),
+                    ))
+                    yield _sse_done()
+                    return
+
+            # ── No results → check related verticals, then offer choice ────────
+            if not coupons:
+                category = _infer_category(message, route)
+
+                if not config.WEB_SEARCH_ENABLED:
+                    full_text = ""
+                    # If no store or vertical was identified, the user sent a conversational
+                    # message (fine/sure/go/etc.) — don't prefix [CANDIDATE COUPONS: none]
+                    # so the LLM handles it naturally instead of firing the empty-coupons rule.
+                    _no_context = not route.store_ids and not route.vertical_ids
+                    async for chunk in _stream_fallback_response(
+                        message,
+                        candidate_coupons=None if _no_context else "none",
+                    ):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                    yield _sse_done()
+                    return
+
+                # Try broader/related verticals (e.g. "Travel" when "Flights" had 0)
+                related_vids, related_label = _find_related_verticals(route.vertical_ids)
+                if related_vids:
+                    related_coupons, _ = await retriever.get_coupons_for_verticals(related_vids)
+                else:
+                    related_coupons = []
+
+                if related_coupons:
+                    # Dual option: GrabOn related coupons OR web search
+                    pending = f"choice:{','.join(str(v) for v in related_vids)}|web:{category}"
+                    full_text = ""
+                    async for chunk in responder.stream_dual_no_results_response(category, related_label):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=full_text,
+                        pending_offer=pending,
+                    ))
+                else:
+                    # No related coupons either → just offer web search
+                    full_text = ""
+                    async for chunk in responder.stream_no_results_response(category):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(
+                        role="assistant", content=full_text,
+                        was_narrowing=True,
+                        pending_offer=f"web:{category}",
+                    ))
+                yield _sse_done()
+                return
+
+            # ── Stream LLM response with coupons ───────────────────────────────
+            full_text = ""
+            pending   = _infer_next_category(route)
+
+            # Prepend discount fallback notice if we relaxed the filter
+            if discount_fallback_msg:
+                yield _sse_text(discount_fallback_msg + "\n\n")
+                full_text += discount_fallback_msg + "\n\n"
+
+            # Skip filter only for store queries — results are already scoped to that store.
+            # For all vertical queries (single or multi), run the LLM relevance filter
+            # so unrelated stores in broad verticals (Kuku FM in Education, etc.) get dropped.
+            _skip_filter = _coupons_pre_filtered or (
+                bool(route.store_ids) and not route.location_keywords and not route.is_new_user
+            )
+            async for chunk in responder.stream_coupon_response(
+                user_message          = message,
+                session_id            = session_id,
+                coupons               = coupons,
+                pending_offer         = pending,
+                skip_relevance_filter = _skip_filter,
+            ):
+                if isinstance(chunk, str):
+                    yield _sse_text(chunk)
+                    full_text += chunk
+                else:
+                    yield _sse_coupons(chunk["data"])
+
+            # Tell user which requested categories had no results
+            if _empty_vids:
+                _vname_map = {v["id"]: v["name"] for v in vertical_classifier.get_verticals_list()}
+                _missing = ", ".join(_vname_map.get(v, str(v)) for v in _empty_vids)
+                _note = f"\n\nNo active coupon codes found for {_missing} on GrabOn right now."
+                yield _sse_text(_note)
+                full_text += _note
+
+            conv.add_message(session_id, conv.Message(role="user", content=message))
+            conv.add_message(session_id, conv.Message(
+                role="assistant", content=full_text,
+                matched_vertical_ids=route.vertical_ids,
+                store_ids=route.store_ids or [s[0] for s in stores_searched],
+                coupon_count=len(coupons),
+                pending_offer=pending,
+            ))
+            yield _sse_done()
+
+        except Exception as e:
+            log.exception("Chat error: %s", e)
+            yield _sse_error("Something went wrong. Please try again.")
+            yield _sse_done()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _infer_category(message: str, route) -> str:
+    """Best-guess category name for messages to the user."""
+    if route.store_ids:
+        query_lower = (route.corrected_query or message).lower()
+        # Prefer a store whose name actually appears in the user's message
+        for sid in route.store_ids:
+            name = cache.get_store_name(sid)
+            if name and name.lower() in query_lower:
+                return name
+        # Fallback: first non-empty store name
+        for sid in route.store_ids:
+            name = cache.get_store_name(sid)
+            if name:
+                return name
+    if route.vertical_ids:
+        verticals = vertical_classifier.get_verticals_list()
+        vid = route.vertical_ids[0]
+        for v in verticals:
+            if v["id"] == vid:
+                return v["name"]
+    return (route.corrected_query or message).strip().split("for")[-1].strip()[:30]
+
+
+def _infer_next_category(route) -> str:
+    """Guess what the assistant might offer next (for pending_offer metadata)."""
+    return ""
+
+
+def _extract_web_category(pending_offer: str) -> str:
+    """Extract a clean brand/category name from a pending_offer string."""
+    if "|" in pending_offer:
+        web_part = pending_offer.split("|")[-1]
+    else:
+        web_part = pending_offer
+    raw = web_part[4:] if web_part.startswith("web:") else web_part
+    # Strip coupon-search noise words to get just the brand/category name
+    noise = {"coupon", "coupons", "code", "codes", "deal", "deals",
+             "offer", "offers", "promo", "discount", "off", "working", "free"}
+    words = [w for w in raw.split() if w.lower() not in noise]
+    return " ".join(words).strip() or raw
+
+
+def _extract_related_vids(pending_offer: str) -> list[int]:
+    """Extract related vertical IDs from a 'choice:vid1,vid2|web:...' pending_offer."""
+    if not pending_offer.startswith("choice:"):
+        return []
+    choice_part = pending_offer.split("|")[0][7:]  # strip "choice:"
+    try:
+        return [int(v) for v in choice_part.split(",") if v]
+    except ValueError:
+        return []
+
+
+_TRAVEL_KEYWORDS = {"travel", "bus", "train", "cab", "hotel", "flight", "flights"}
+
+def _find_related_verticals(searched_vids: list[int]) -> tuple[list[int], str]:
+    """
+    When a specific sub-vertical (e.g. Flights) returns 0 coupons,
+    find related broader verticals that DO have stores mapped.
+    Returns (related_vertical_ids, human-readable label).
+    """
+    if not searched_vids:
+        return [], ""
+
+    all_verticals = vertical_classifier.get_verticals_list()
+    vid_set = {v["id"] for v in all_verticals}
+
+    # Resolve names for searched verticals
+    name_map = {v["id"]: v["name"].lower() for v in all_verticals}
+    matched_names = {name_map.get(vid, "") for vid in searched_vids}
+
+    is_travel = any(kw in " ".join(matched_names) for kw in _TRAVEL_KEYWORDS)
+    if not is_travel:
+        return [], ""
+
+    # Find all travel-related verticals by name, excluding already-searched ones
+    related = [
+        v["id"] for v in all_verticals
+        if any(kw in v["name"].lower() for kw in _TRAVEL_KEYWORDS)
+        and v["id"] not in searched_vids
+        and v["id"] in vid_set
+    ]
+
+    if not related:
+        return [], ""
+
+    return related, "bus, train, and other travel options"
+
+
+# ── Web search continuation ────────────────────────────────────────────────────
+
+class WebSearchRequest(BaseModel):
+    session_id: str
+    category: str
+
+
+@app.post("/api/chat/web-search")
+async def chat_web_search(req: WebSearchRequest):
+    session_id = req.session_id
+    category   = req.category.strip()
+
+    async def generate():
+        try:
+            results = await external_search.search_web(category)
+            full_text = ""
+            async for chunk in responder.stream_web_results_response(
+                user_message = f"Search the web for {category} coupons",
+                session_id   = session_id,
+                web_results  = results,
+                category     = category,
+            ):
+                yield _sse_text(chunk)
+                full_text += chunk
+
+            conv.add_message(session_id, conv.Message(
+                role="assistant", content=full_text,
+            ))
+            yield _sse_done()
+
+        except Exception as e:
+            log.exception("Web search error: %s", e)
+            yield _sse_error("Web search failed. Please try again.")
+            yield _sse_done()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── Admin endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/api/cache/refresh")
+async def refresh_cache():
+    cache.build()
+    store_index.build()
+    vertical_classifier.build()
+    return {"status": "refreshed"}
+
+
+@app.get("/api/health")
+async def health():
+    stats = cache.get_stats()
+    return {
+        "status":              "ok",
+        "categories":          stats["categories"],
+        "stores":              stats["stores"],
+        "coupons_with_codes":  stats["coupons_with_codes"],
+        "classifier":          "gpt-4o-mini (LLM)",
+        "llm":                 config.LLM_PROVIDER,
+        "model":               config.OLLAMA_MODEL if config.LLM_PROVIDER == "ollama" else config.OPENAI_MODEL,
+    }
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host    = config.API_HOST,
+        port    = config.API_PORT,
+        reload  = False,
+        workers = 1,
+    )

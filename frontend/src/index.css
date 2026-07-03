@@ -1,0 +1,282 @@
+@import url('https://fonts.cdnfonts.com/css/soehne');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: "Söhne", "Soehne", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: #212121;
+  color: #ececec;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #606060;
+}
+
+/* Coupon icon spin */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+
+/* Smooth textarea resize */
+textarea {
+  field-sizing: content;
+}
+
+/* ─── Gold shimmer sweep on coupon code ─────────────────────────────────── */
+@keyframes goldShimmer {
+  0%   { transform: translateX(-140%) skewX(-18deg); opacity: 0; }
+  8%   { opacity: 1; }
+  55%  { opacity: 1; }
+  100% { transform: translateX(240%) skewX(-18deg); opacity: 0; }
+}
+
+.gold-shimmer-sweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  border-radius: 10px;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    rgba(255, 235, 80,  0.00) 32%,
+    rgba(255, 245, 150, 0.70) 46%,
+    rgba(255, 255, 210, 0.92) 50%,
+    rgba(255, 245, 150, 0.70) 54%,
+    rgba(255, 235, 80,  0.00) 68%,
+    transparent 80%
+  );
+  mix-blend-mode: screen;
+  animation: goldShimmer 2.5s ease-in-out infinite;
+  animation-delay: 1s;
+  animation-fill-mode: backwards;
+}
+
+/* ─── Coupon card hover lift + glow ─────────────────────────────────────── */
+.coupon-card-outer {
+  transition: box-shadow 0.25s ease, transform 0.18s ease;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.coupon-card-outer:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(210,230,0,0.10), 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+
+/* ─── Top edge yellow accent glow line ───────────────────────────────────── */
+.coupon-top-glow {
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(210,230,0,0.4), transparent);
+  border-radius: 99px;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CARD DISPENSER LOADING ANIMATION
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Flight path — transform only (no opacity) ── */
+@keyframes dispenserFlyPath {
+  0%   { transform: translateX(0px)   translateY(0px)  scale(1)    rotate(-4deg); }
+  85%  { transform: translateX(220px) translateY(12px) scale(0.32) rotate(14deg); }
+  100% { transform: translateX(250px) translateY(18px) scale(0.08) rotate(22deg); }
+}
+
+/* ── Card face — visible during flight, hands off to particles at 20% ── */
+@keyframes dispenserFaceFly {
+  0%   { opacity: 0;   filter: drop-shadow(0 0 0px #D2E600); }
+  6%   { opacity: 1;   filter: drop-shadow(0 0 6px #D2E600) drop-shadow(0 0 14px rgba(210,230,0,0.7)); }
+  13%  { opacity: 0.9; filter: drop-shadow(0 0 10px #D2E600) drop-shadow(0 0 22px rgba(210,230,0,0.5)) blur(0.5px); }
+  18%  { opacity: 0.3; filter: drop-shadow(0 0 4px #D2E600) blur(0.5px); }
+  20%  { opacity: 0;   filter: none; }
+  100% { opacity: 0; }
+}
+
+/* ── Particle dissolve — 12 glowing dots scatter radially when card dissolves ── */
+@keyframes dispenserParticle0 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.90; filter: drop-shadow(0 0 4px #D2E600); }
+  24%      { filter: drop-shadow(0 0 8px #D2E600) brightness(2.2); }
+  100%     { transform: translate(-55px, -15px) rotate(-18deg); opacity: 0; filter: blur(1.5px); }
+}
+@keyframes dispenserParticle1 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.95; filter: drop-shadow(0 0 3px #D2E600); }
+  24%      { filter: drop-shadow(0 0 7px #D2E600) brightness(2.0); }
+  100%     { transform: translate(-35px, -50px) rotate(10deg); opacity: 0; filter: blur(1px); }
+}
+@keyframes dispenserParticle2 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.90; filter: drop-shadow(0 0 4px #D2E600); }
+  24%      { filter: drop-shadow(0 0 9px #D2E600) brightness(2.3); }
+  100%     { transform: translate(-5px, -62px) rotate(25deg); opacity: 0; filter: blur(1.5px); }
+}
+@keyframes dispenserParticle3 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 1.00; filter: drop-shadow(0 0 5px #D2E600); }
+  24%      { filter: drop-shadow(0 0 10px #D2E600) brightness(2.5); }
+  100%     { transform: translate(30px, -48px) rotate(-30deg); opacity: 0; filter: blur(2px); }
+}
+@keyframes dispenserParticle4 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.85; filter: drop-shadow(0 0 3px #D2E600); }
+  24%      { filter: drop-shadow(0 0 6px #D2E600) brightness(1.9); }
+  100%     { transform: translate(58px, -8px) rotate(15deg); opacity: 0; filter: blur(1px); }
+}
+@keyframes dispenserParticle5 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.90; filter: drop-shadow(0 0 4px #D2E600); }
+  24%      { filter: drop-shadow(0 0 8px #D2E600) brightness(2.1); }
+  100%     { transform: translate(50px, 28px) rotate(-22deg); opacity: 0; filter: blur(1.5px); }
+}
+@keyframes dispenserParticle6 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.88; filter: drop-shadow(0 0 3px #D2E600); }
+  24%      { filter: drop-shadow(0 0 7px #D2E600) brightness(2.0); }
+  100%     { transform: translate(18px, 60px) rotate(30deg); opacity: 0; filter: blur(1px); }
+}
+@keyframes dispenserParticle7 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 1.00; filter: drop-shadow(0 0 5px #D2E600); }
+  24%      { filter: drop-shadow(0 0 10px #D2E600) brightness(2.4); }
+  100%     { transform: translate(-15px, 58px) rotate(-12deg); opacity: 0; filter: blur(2px); }
+}
+@keyframes dispenserParticle8 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.95; filter: drop-shadow(0 0 5px #D2E600); }
+  24%      { filter: drop-shadow(0 0 9px #D2E600) brightness(2.2); }
+  100%     { transform: translate(-48px, 32px) rotate(20deg); opacity: 0; filter: blur(2px); }
+}
+@keyframes dispenserParticle9 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.85; filter: drop-shadow(0 0 3px #D2E600); }
+  24%      { filter: drop-shadow(0 0 6px #D2E600) brightness(1.9); }
+  100%     { transform: translate(-52px, 5px) rotate(-15deg); opacity: 0; filter: blur(1px); }
+}
+@keyframes dispenserParticle10 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.90; filter: drop-shadow(0 0 4px #D2E600); }
+  24%      { filter: drop-shadow(0 0 8px #D2E600) brightness(2.1); }
+  100%     { transform: translate(-22px, -30px) rotate(-20deg); opacity: 0; filter: blur(1.5px); }
+}
+@keyframes dispenserParticle11 {
+  0%, 19% { transform: translate(0, 0) rotate(0deg); opacity: 0; filter: none; }
+  20%      { opacity: 0.88; filter: drop-shadow(0 0 3px #D2E600); }
+  24%      { filter: drop-shadow(0 0 7px #D2E600) brightness(2.0); }
+  100%     { transform: translate(22px, 18px) rotate(12deg); opacity: 0; filter: blur(1px); }
+}
+
+/* ── Container: transform only ── */
+.dispenser-item {
+  position: absolute;
+  left: 0;
+  transform-origin: left center;
+  animation: dispenserFlyPath 4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+  animation-fill-mode: both;
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* ── Face layer ── */
+.dispenser-face {
+  position: absolute;
+  inset: 0;
+  animation: dispenserFaceFly 4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+  animation-fill-mode: both;
+  will-change: opacity, filter;
+}
+
+/* ── Particle dot base style ── */
+.dispenser-particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  background: #D2E600;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+/* 3px particles */
+.dispenser-particle-0,
+.dispenser-particle-2,
+.dispenser-particle-5,
+.dispenser-particle-10 { width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; }
+/* 2px particles */
+.dispenser-particle-1,
+.dispenser-particle-4,
+.dispenser-particle-6,
+.dispenser-particle-9,
+.dispenser-particle-11 { width: 2px; height: 2px; margin: -1px 0 0 -1px; }
+/* 4px particles */
+.dispenser-particle-3,
+.dispenser-particle-7,
+.dispenser-particle-8 { width: 4px; height: 4px; margin: -2px 0 0 -2px; }
+
+.dispenser-particle-0  { animation: dispenserParticle0  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-1  { animation: dispenserParticle1  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-2  { animation: dispenserParticle2  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-3  { animation: dispenserParticle3  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-4  { animation: dispenserParticle4  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-5  { animation: dispenserParticle5  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-6  { animation: dispenserParticle6  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-7  { animation: dispenserParticle7  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-8  { animation: dispenserParticle8  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-9  { animation: dispenserParticle9  4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-10 { animation: dispenserParticle10 4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+.dispenser-particle-11 { animation: dispenserParticle11 4s cubic-bezier(0.22, 0.61, 0.36, 1) infinite; animation-fill-mode: both; }
+
+/* ── Neon glow trail ── */
+@keyframes trailPulse {
+  0%, 100% { opacity: 0;    transform: scaleX(0.15) scaleY(0.5); }
+  12%       { opacity: 0.7; transform: scaleX(0.5)  scaleY(1); }
+  45%       { opacity: 0.5; transform: scaleX(1)    scaleY(1.3); }
+  80%       { opacity: 0.15; transform: scaleX(1.1)  scaleY(0.8); }
+}
+
+.dispenser-trail {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform-origin: left center;
+  width: 220px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 99px;
+  background: linear-gradient(
+    90deg,
+    rgba(210,230,0,0.25) 0%,
+    rgba(210,230,0,0.12) 30%,
+    rgba(210,230,0,0.04) 70%,
+    transparent 100%
+  );
+  filter: blur(7px);
+  animation: trailPulse 4s ease-in-out infinite;
+  pointer-events: none;
+}
+

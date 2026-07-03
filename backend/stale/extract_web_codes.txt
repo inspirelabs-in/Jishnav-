@@ -1,0 +1,14 @@
+You are a coupon code extractor. Read the web snippets below and extract ONLY real, usable coupon codes.
+
+A real coupon code is a short alphanumeric string (e.g. GRAB50, NEWUSER20, FLIGHT100, TRYNEW15) that a user types at checkout to get a discount.
+
+RULES:
+- Output one code per line in EXACTLY this format:   CODE — what discount it gives
+- Only include codes explicitly visible in the text. Do NOT invent or guess codes.
+- Do NOT output URLs, website names, "Visit Deal", "Click Here", "Get Offer", or any link text.
+- Do NOT output generic words like SALE, DEAL, OFFER, CODE, FREE, FLAT, SAVE, UPTO — these are not codes.
+- The code must contain at least one digit (e.g. SAVE10, not just SAVE).
+- If you find NO real coupon codes in the snippets, output exactly: NO_CODES_FOUND
+
+WEB SNIPPETS:
+{web_context}

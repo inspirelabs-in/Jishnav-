@@ -1,0 +1,32 @@
+# Vertical IDs to exclude at load time (test entries, junk, promo mechanics)
+excluded_vertical_ids:
+  - 2077
+  - 2085
+  - 2097
+  - 2098
+  - 2099
+  - 2100
+  - 2101
+  - 2155
+  - 2156
+  - 2385
+  - 2386
+  - 2392
+  - 2948
+  - 3017
+  - 5226
+  - 5826
+  - 2394
+
+# Duplicate vertical pairs to merge in cache.
+# Use the lower ID as canonical; both IDs map to the same set of stores.
+vertical_merge_pairs:
+  - id_a: 2076
+    id_b: 2137
+    name: "Baby Toys"
+  - id_a: 2105
+    id_b: 2152
+    name: "Women's Lifestyle"
+  - id_a: 2108
+    id_b: 3884
+    name: "Kids"

@@ -238,13 +238,21 @@ async def filter_brand_coupons(brand: str, coupons: list[dict]) -> list[dict]:
 
 
 async def _classify_relevant_groups(
-    groups: dict[str, list[str]], user_message: str
+    groups: dict[str, list[dict]], user_message: str
 ) -> dict[str, list[int]]:
     """
     One combined gpt-4o-mini call. `groups` maps an item label (e.g. "bus", "hotel",
-    or "_single" for a one-item query) to a list of coupon NAMES ONLY (sitewide and
-    synonym-tier coupons are already pulled out in pure Python before this is called —
-    the LLM's only job is semantic relevance, nothing it could get by exact keyword match).
+    or "_single" for a one-item query) to a list of {"store", "name"} candidates
+    (sitewide and synonym-tier coupons from a single-store pool are already pulled
+    out in pure Python before this is called -- the LLM's only job is semantic
+    relevance, nothing it could get by exact keyword match).
+
+    The store name travels with each candidate specifically so the model can judge
+    STORE-TYPE fit, not just literal keyword overlap in the coupon text -- a broad
+    vertical mixes unrelated businesses (a bakery next to a food-delivery platform),
+    and without knowing which store a coupon belongs to, "no literal keyword match"
+    and "wrong kind of business entirely" look identical to a text-only filter.
+
     Returns {label: [indices into that group's own list]}. Empty list per group on
     error or when that item's ask was generic (no specific product/category).
     """
@@ -254,10 +262,18 @@ async def _classify_relevant_groups(
 
     prompt = (
         f"User asked: \"{user_message}\"\n\n"
-        f"Coupon names grouped by item:\n{json.dumps(non_empty, indent=2)}\n\n"
+        f"Coupons grouped by item, each with its store:\n{json.dumps(non_empty, indent=2)}\n\n"
         f"For EACH group, return the indices (within that group's own list) of coupons "
         f"that genuinely match what the user asked for regarding that specific item "
         f"(a brand, product type, or category mentioned in the request).\n"
+        f"Judge by STORE TYPE, not just literal keyword overlap in the coupon name:\n"
+        f"  - KEEP a store whose business plausibly sells or delivers what was asked, "
+        f"even if the coupon text is generic (e.g. a food-delivery platform's 'flat "
+        f"50% off orders' coupon is a genuine match for a biriyani/noodles/veg-meal request).\n"
+        f"  - EXCLUDE a store whose business is clearly the wrong category for what was "
+        f"asked, even if its coupon looks like a big generic discount (e.g. a bakery or "
+        f"cake shop is NOT a match for a biriyani/noodles request just because it has a "
+        f"sitewide-sounding offer -- wrong kind of business beats any discount size).\n"
         f"If the ask for an item was a generic store-only request with no specific "
         f"product/category, return [] for that group — a generic ask has nothing to "
         f"be more specific than.\n"
@@ -309,22 +325,43 @@ async def select_top_coupons_for_items(
     order. One combined LLM call covers relevance for every item at once.
     Dedups by exact CouponCode within each item's result (a coupon picked into an
     earlier tier is never eligible for a later tier).
+
+    The sitewide/synonym keyword tiers only get priority when a group's pool is
+    a SINGLE store (the user named a store, so "sitewide" means that store's
+    own blanket offer -- inherently relevant). When a pool spans MULTIPLE
+    different stores (a broad vertical with no store named, e.g. "biriyani"
+    resolving to the whole Food vertical), a random store's "sitewide" wording
+    says nothing about whether that store is even the right kind of business
+    for what was asked -- treating it as automatic top priority is how an
+    unrelated bakery's blanket discount out-ranks an actual food-delivery
+    platform for a biriyani search. In that case everything goes through
+    relevance judgment on equal footing instead.
     """
     per_item_tiers: dict[str, dict] = {}
     for label, coupons in item_coupons.items():
+        merchant_ids = {c.get("MerchantID") for c in coupons if c.get("MerchantID") is not None}
+        single_store = len(merchant_ids) <= 1
+
         sitewide, synonym, leftover = [], [], []
-        for c in coupons:
-            tier = coupon_tiers.classify_keyword_tier(c.get("CouponName") or "")
-            if tier == "sitewide":
-                sitewide.append(c)
-            elif tier == "synonym":
-                synonym.append(c)
-            else:
-                leftover.append(c)
+        if single_store:
+            for c in coupons:
+                tier = coupon_tiers.classify_keyword_tier(c.get("CouponName") or "")
+                if tier == "sitewide":
+                    sitewide.append(c)
+                elif tier == "synonym":
+                    synonym.append(c)
+                else:
+                    leftover.append(c)
+        else:
+            leftover = list(coupons)
+
         per_item_tiers[label] = {"sitewide": sitewide, "synonym": synonym, "leftover": leftover}
 
     name_groups = {
-        label: [(c.get("CouponName") or "").strip() for c in t["leftover"]]
+        label: [
+            {"store": c.get("StoreName") or "", "name": (c.get("CouponName") or "").strip()}
+            for c in t["leftover"]
+        ]
         for label, t in per_item_tiers.items()
     }
     relevant_by_item = await _classify_relevant_groups(name_groups, user_message)

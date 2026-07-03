@@ -37,7 +37,7 @@ RULES:
    - "negation"       — short no/nope/nahi
    - "web_search"     — user EXPLICITLY asks to search the internet/web using words like "search the web", "google it", "browse online", "find on internet", "look it up online". IMPORTANT: phrases like "show me codes from Nike", "codes from HP", "deals from Zomato" are NOT web_search — "from" here means the brand/store, so classify as "coupon_search" instead.
    - "grabon_related" — user explicitly asks to see the GrabOn related offers mentioned earlier
-   - "system_info"    — user asks what GrabGPT can do, what categories/stores are available, how it works, what it offers
+   - "system_info"    — user asks what GrabonGPT can do, what categories/stores are available, how it works, what it offers
    - "non_coupon"     — completely unrelated to coupons (weather, general knowledge, etc.)
 6. is_new_user: set true if the CURRENT message (not history) explicitly mentions first-time user, new user, first order, first booking, never used before, first time traveller, etc. Do NOT infer this from conversation history. Examples: "Swiggy first order discount" → true, "Zomato new user code" → true, "first time booking offer" → true, "best Swiggy offers" → false.
 7. requested_count: if the user says how many coupons they want ("show me 2", "give 3 codes", "I need only one"), set this to that number. Otherwise set to null.

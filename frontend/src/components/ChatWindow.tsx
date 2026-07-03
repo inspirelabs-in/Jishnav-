@@ -35,7 +35,7 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark }: Prop
           <CouponIcon size={46} />
         </div>
         <h1 className={`font-display text-[36px] font-medium mb-2 ${textColor}`} style={{ letterSpacing: "-0.01em" }}>
-          GrabGPT
+          GrabonGPT
         </h1>
         <p className="font-mono text-[12px] uppercase tracking-[0.18em] mb-9" style={{ color: "var(--text-2)" }}>
           Live coupon intelligence for GrabOn
@@ -114,9 +114,7 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
 
   return (
     <div className="flex gap-3 items-start">
-      <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5" style={{ background: "var(--brand)" }}>
-        <CouponIcon size={20} />
-      </div>
+      <CometRing />
       <div className="flex flex-col gap-1.5 font-mono text-[13px] pt-1">
         {lines.slice(0, visibleCount).map((line, i) => {
           const isActive = i === visibleCount - 1;
@@ -133,6 +131,79 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Comet ring around the logo, brought back from the original UI at the
+ * original brand lime (#D2E600) regardless of theme -- this is the signature
+ * loading motif, kept intentionally separate from the muted per-theme accent
+ * used elsewhere so the logo never reads as dim during the search moment.
+ * Three SVG arc segments (far tail → mid → near-head) create a smooth
+ * gradient-like fade. A soft bloom + sharp head dot sit at 12 o'clock.
+ */
+function CometRing() {
+  const S = 40;
+  const cx = 20, cy = 20, r = 20;
+
+  const pt = (deg: number) => ({
+    x: +(cx + r * Math.sin((deg * Math.PI) / 180)).toFixed(3),
+    y: +(cy - r * Math.cos((deg * Math.PI) / 180)).toFixed(3),
+  });
+
+  const head = pt(0);
+  const cometArc = (fromDeg: number) => {
+    const s = pt(fromDeg);
+    const span = ((0 - fromDeg) % 360 + 360) % 360;
+    return `M ${s.x} ${s.y} A ${r} ${r} 0 ${span > 180 ? 1 : 0} 1 ${head.x} ${head.y}`;
+  };
+
+  return (
+    <div className="shrink-0 relative w-8 h-8" style={{ overflow: "visible" }}>
+      <div
+        className="absolute animate-spin pointer-events-none"
+        style={{
+          top: -4, left: -4, width: S, height: S,
+          animationDuration: "1s",
+          animationTimingFunction: "linear",
+          overflow: "visible",
+        }}
+      >
+        <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`} style={{ overflow: "visible" }}>
+          <defs>
+            <filter id="gg-glow" x="-200%" y="-200%" width="500%" height="500%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="b" />
+              <feMerge>
+                <feMergeNode in="b" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <filter id="gg-bloom" x="-200%" y="-200%" width="500%" height="500%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="5" />
+            </filter>
+          </defs>
+
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(210,230,0,0.06)" strokeWidth="1" />
+
+          <path d={cometArc(260)} fill="none" stroke="#D2E600" strokeWidth="1.5" strokeLinecap="butt" opacity={0.07} />
+          <path d={cometArc(300)} fill="none" stroke="#D2E600" strokeWidth="2" strokeLinecap="butt" opacity={0.26} />
+          <path
+            d={cometArc(332)}
+            fill="none" stroke="#D2E600"
+            strokeWidth="2.5" strokeLinecap="round"
+            opacity={0.88}
+            filter="url(#gg-glow)"
+          />
+
+          <circle cx={head.x} cy={head.y} r={7} fill="#D2E600" opacity={0.20} filter="url(#gg-bloom)" />
+          <circle cx={head.x} cy={head.y} r={2.8} fill="#D2E600" filter="url(#gg-glow)" />
+        </svg>
+      </div>
+
+      <div className="absolute inset-0 rounded-full flex items-center justify-center z-10" style={{ background: "#D2E600" }}>
+        <CouponIcon size={16} />
       </div>
     </div>
   );

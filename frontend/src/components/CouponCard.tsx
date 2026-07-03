@@ -92,7 +92,7 @@ export function CouponCard({ coupon, isDark }: Props) {
         window.open(coupon.couponUrl, "_blank", "noopener,noreferrer");
       }
       setState("revealed");
-    }, 1500);
+    }, 1000);
   };
 
   const handleCopy = () => {
@@ -103,27 +103,9 @@ export function CouponCard({ coupon, isDark }: Props) {
     });
   };
 
-  const cardBase  = isDark ? "bg-[#141416] border-[#262629]" : "bg-white border-[#E4E2DD]";
-  const nameColor = isDark ? "text-[#EDEDEC]" : "text-[#171614]";
-  const divider   = isDark ? "border-[#262629]" : "border-[#E4E2DD]";
-  const metaText  = isDark ? "text-[#55555A]" : "text-[#A6A399]";
-  const metaVal   = isDark ? "text-[#9A9A9F]" : "text-[#6B6963]";
-  const stubBg    = isDark ? "bg-[#0B0B0C]" : "bg-[#F7F6F3]";
-
-  const urgency: Record<string, string> = isDark ? {
-    expires_today: "bg-[#E5595E]/10 text-[#E5595E] border-[#E5595E]/25",
-    expires_soon : "bg-[#E8A33D]/10 text-[#E8A33D] border-[#E8A33D]/25",
-    valid        : "bg-[#3FB67F]/10 text-[#3FB67F] border-[#3FB67F]/25",
-    no_expiry    : "bg-[#1C1C1F] text-[#55555A] border-[#262629]",
-    expired      : "bg-[#1C1C1F] text-[#4A4A4E] border-[#262629]",
-  } : {
-    expires_today: "bg-red-50 text-red-700 border-red-200",
-    expires_soon : "bg-[#F6E7CE] text-[#8F5A12] border-[#e7cfa0]",
-    valid        : "bg-green-50 text-[#1F9D63] border-green-200",
-    no_expiry    : "bg-gray-100 text-gray-500 border-gray-200",
-    expired      : "bg-gray-100 text-gray-400 border-gray-200",
-  };
-  const urgencyClass = urgency[coupon.validityUrgency] ?? urgency.valid;
+  const cardBase = isDark ? "bg-[#141416] border-[#262629]" : "bg-white border-[#E4E2DD]";
+  const divider  = isDark ? "border-[#262629]" : "border-[#E4E2DD]";
+  const stubBg   = isDark ? "bg-[#0B0B0C]" : "bg-[#F7F6F3]";
 
   return (
     <div className={`coupon-card-outer card-resolve relative border rounded-2xl p-3.5 w-full overflow-hidden flex flex-col ${cardBase}`}>
@@ -144,37 +126,13 @@ export function CouponCard({ coupon, isDark }: Props) {
         </div>
       )}
 
-      {/* Store name */}
-      <div className="mb-2 flex items-center gap-1.5">
+      {/* Item name — the only text on the card besides the code itself */}
+      <div className="mb-3 flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "var(--brand)" }} />
-        <span className="text-[11px] font-bold uppercase tracking-[0.14em] font-mono" style={{ color: isDark ? "#B8C900" : "#8A9700" }}>
+        <span className="text-[12px] font-bold uppercase tracking-[0.14em] font-mono" style={{ color: "var(--brand)" }}>
           {coupon.storeName}
         </span>
       </div>
-
-      {/* Coupon name — max 2 lines */}
-      <p className={`text-[12px] font-medium leading-snug mb-2.5 line-clamp-2 ${nameColor}`}>
-        {coupon.couponName}
-      </p>
-
-      {/* Validity badge */}
-      <div className={`self-start text-[10px] px-2 py-0.5 rounded-md border mb-2.5 font-semibold inline-flex items-center gap-1 font-mono ${urgencyClass}`}>
-        {coupon.validityUrgency === "expires_today" && "⚡ "}
-        {coupon.validityUrgency === "expires_soon"  && "⏳ "}
-        {coupon.validityLabel}
-      </div>
-
-      {/* Min order / max discount */}
-      {(coupon.minOrderAmount || coupon.maxDiscount) && (
-        <div className={`text-[10px] mb-2.5 flex flex-wrap gap-x-3 ${metaText}`}>
-          {coupon.minOrderAmount && (
-            <span>Min: <span className={`font-semibold ${metaVal}`}>₹{coupon.minOrderAmount.toLocaleString("en-IN")}</span></span>
-          )}
-          {coupon.maxDiscount && (
-            <span>Max off: <span className={`font-semibold ${metaVal}`}>₹{coupon.maxDiscount.toLocaleString("en-IN")}</span></span>
-          )}
-        </div>
-      )}
 
       <div className={`mt-auto border-t border-dashed mb-2.5 ${divider}`} />
 

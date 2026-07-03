@@ -72,7 +72,7 @@ export function Sidebar({
           <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "var(--brand)" }}>
             <CouponIcon size={22} />
           </div>
-          <span className={`font-display text-[19px] font-medium ${s.logoText}`}>GrabGPT</span>
+          <span className={`font-display text-[19px] font-medium ${s.logoText}`}>GrabonGPT</span>
         </div>
         <div className="flex items-center gap-1">
           <button

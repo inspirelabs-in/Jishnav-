@@ -143,7 +143,7 @@ async def stream_unavailable_response(
     llm = get_llm()
     full_text = ""
     async for chunk in llm.generate(
-        system_prompt = "You are GrabGPT, a friendly coupon assistant for GrabOn.in.",
+        system_prompt = "You are GrabonGPT, a friendly coupon assistant for GrabOn.in.",
         messages      = messages,
         temperature   = 0.8,  # higher than normal -- the whole point is varied phrasing
         max_tokens    = 80,

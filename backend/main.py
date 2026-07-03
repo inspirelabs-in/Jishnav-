@@ -1,5 +1,5 @@
 """
-GrabGPT FastAPI backend — main entry point.
+GrabonGPT FastAPI backend — main entry point.
 """
 
 import json
@@ -32,7 +32,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="GrabGPT API", version="1.0.0")
+app = FastAPI(title="GrabonGPT API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,13 +47,13 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup() -> None:
-    log.info("Starting GrabGPT backend...")
+    log.info("Starting GrabonGPT backend...")
     cache.build()
     store_index.build()
     vertical_classifier.build()
     conv.start_eviction_loop()
     cache.start_refresh_loop()
-    log.info("GrabGPT backend ready.")
+    log.info("GrabonGPT backend ready.")
 
 
 # ── Request / Response models ──────────────────────────────────────────────────
@@ -188,7 +188,7 @@ async def chat(req: ChatRequest):
                 full_text = ""
                 async for chunk in llm.generate(
                     system_prompt=(
-                        f"You are GrabGPT, GrabOn.in's coupon assistant. "
+                        f"You are GrabonGPT, GrabOn.in's coupon assistant. "
                         f"Answer the user's question about what you offer. "
                         f"Use only the data below — do not invent stores or categories.\n\n"
                         f"Stats: {stats['coupons_with_codes']} active coupon codes across "

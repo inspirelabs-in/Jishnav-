@@ -283,26 +283,38 @@ async def chat(req: ChatRequest):
                 # User said yes to "want general flight/hotel deals?" offer
                 if route.pending_offer.startswith("general_fallback:"):
                     gen_vids = [int(v) for v in route.pending_offer[17:].split(",") if v]
-                    per = max(3, limit // max(1, len(gen_vids)))
-                    gen_coupons: list[dict] = []
+                    _fb_vnames = {v["id"]: v["name"] for v in vertical_classifier.get_verticals_list()}
+                    _gen_fetch_limit = _fetch_limit_for_items(len(gen_vids))
+                    _gen_quota       = _quota_for_items(len(gen_vids))
+
+                    # Fetch per vertical and KEEP them grouped by name -- required so the
+                    # tier-fill selector applies sitewide/relevant/synonym priority within
+                    # each category separately instead of mixing them into one pool.
+                    gen_groups: dict[str, list[dict]] = {}
                     for gvid in gen_vids:
-                        c, _ = await retriever.get_coupons_for_verticals([gvid], limit=per)
-                        gen_coupons.extend(c)
-                    gen_coupons = gen_coupons[:limit]
-                    if not gen_coupons:
+                        c, _ = await retriever.get_coupons_for_verticals([gvid], limit=_gen_fetch_limit)
+                        if c:
+                            gen_groups[_fb_vnames.get(gvid, str(gvid))] = c
+
+                    if not gen_groups:
                         reply = "No active coupons found for those categories right now."
                         yield _sse_text(reply)
                         conv.add_message(session_id, conv.Message(role="user", content=message))
                         conv.add_message(session_id, conv.Message(role="assistant", content=reply))
                         yield _sse_done()
                         return
+
+                    _selected_by_gen = await responder.select_top_coupons_for_items(
+                        gen_groups, message, quota_per_item=_gen_quota,
+                    )
+                    gen_coupons = [c for vname in gen_groups for c in _selected_by_gen.get(vname, [])]
+
                     # Write the intro text directly using the category names we know —
                     # do NOT call stream_coupon_response here because it only reads the
                     # top-3 stores for its summary and would say "hotel deals" even when
                     # food coupons are also included.
-                    _fb_vnames  = {v["id"]: v["name"] for v in vertical_classifier.get_verticals_list()}
-                    gen_names   = [_fb_vnames.get(v, str(v)) for v in gen_vids if _fb_vnames.get(v)]
-                    intro       = f"Here are the general {' and '.join(gen_names)} deals:"
+                    gen_names = list(gen_groups.keys())
+                    intro     = f"Here are the general {' and '.join(gen_names)} deals:"
                     yield _sse_text(intro)
                     yield _sse_coupons(responder.serialise_coupons(gen_coupons))
                     conv.add_message(session_id, conv.Message(role="user", content=message))
@@ -484,7 +496,11 @@ async def chat(req: ChatRequest):
             # Verticals with 0 specific results become a "want general ones?" offer.
             if route.location_keywords and route.vertical_ids and not route.store_ids:
                 _vname_map = {v["id"]: v["name"] for v in vertical_classifier.get_verticals_list()}
-                per_vid    = max(3, limit // max(1, len(route.vertical_ids)))
+                per_vid    = _fetch_limit_for_items(len(route.vertical_ids))
+                # Total shown across all verticals combined -- the SQL LIKE fetch already
+                # merges per-vertical results into one list, so this is a pragmatic single
+                # bound rather than a true per-vertical tier-fill (same 2-per-item target).
+                _loc_quota = _quota_for_items(len(route.vertical_ids)) * len(route.vertical_ids)
 
                 loc_coupons, no_specific_vids = await retriever.get_coupons_for_verticals_with_location(
                     vertical_ids     = route.vertical_ids,
@@ -503,6 +519,7 @@ async def chat(req: ChatRequest):
                         user_message = message,
                         session_id   = session_id,
                         coupons      = loc_coupons,
+                        quota        = _loc_quota,
                     ):
                         if isinstance(chunk, str):
                             yield _sse_text(chunk)
@@ -518,6 +535,7 @@ async def chat(req: ChatRequest):
                     names_str   = " and ".join(no_specific_names)
                     found_str   = " and ".join(n for n in found_names if n) or "some categories"
 
+                    loc_coupons = await responder.select_top_coupons(loc_coupons, message, quota=_loc_quota)
                     intro = f"Here are the {found_str} coupons I found for you:"
                     yield _sse_text(intro)
                     full_text += intro

@@ -229,7 +229,9 @@ async def filter_brand_coupons(brand: str, coupons: list[dict]) -> list[dict]:
         )
         if indices is None:
             return coupons  # parse error → safe fallback
-        return [coupons[i] for i in indices if 0 <= i < len(coupons)]
+        # Defensive: the model can occasionally return a malformed shape (e.g. a
+        # nested list) even under json_object mode -- only trust plain ints.
+        return [coupons[i] for i in indices if isinstance(i, int) and 0 <= i < len(coupons)]
     except Exception as e:
         log.warning("Brand coupon filter failed, returning all: %s", e)
         return coupons
@@ -281,10 +283,12 @@ async def _classify_relevant_groups(
         )
         raw = resp.choices[0].message.content or ""
         parsed = json.loads(raw)
-        return {
-            k: (parsed.get(k) if isinstance(parsed.get(k), list) else [])
-            for k in groups
-        }
+        # Defensive: only trust plain ints -- the model can occasionally return a
+        # malformed shape (e.g. a nested list) even under json_object mode, and a
+        # non-int index would blow up the range check wherever this is consumed.
+        def _clean(v):
+            return [x for x in v if isinstance(x, int)] if isinstance(v, list) else []
+        return {k: _clean(parsed.get(k)) for k in groups}
     except Exception as e:
         log.warning("Relevance classification failed, treating all as non-specific: %s", e)
         return {k: [] for k in groups}
@@ -328,7 +332,7 @@ async def select_top_coupons_for_items(
     results: dict[str, list[dict]] = {}
     for label, t in per_item_tiers.items():
         leftover = t["leftover"]
-        rel_idx  = {i for i in (relevant_by_item.get(label) or []) if 0 <= i < len(leftover)}
+        rel_idx  = {i for i in (relevant_by_item.get(label) or []) if isinstance(i, int) and 0 <= i < len(leftover)}
         relevant  = [leftover[i] for i in sorted(rel_idx)]
         catch_all = [c for i, c in enumerate(leftover) if i not in rel_idx]
 

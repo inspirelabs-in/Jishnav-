@@ -49,17 +49,19 @@ CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")
 API_HOST             = os.getenv("API_HOST", "0.0.0.0")
 API_PORT             = int(os.getenv("API_PORT", "8000"))
 
-# ── SearXNG ────────────────────────────────────────────────────────────────────
-SEARXNG_URL             = os.getenv("SEARXNG_URL", "http://localhost:8080")
-SEARXNG_TIMEOUT_SECONDS = int(os.getenv("SEARXNG_TIMEOUT_SECONDS", "10"))
-
-# ── Feature flags ──────────────────────────────────────────────────────────────
-# v0: Web search is disabled for the demo — set WEB_SEARCH_ENABLED=true in .env
-# for v1 once SearXNG is verified running at SEARXNG_URL.
-WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
-
 # ── Config file paths ──────────────────────────────────────────────────────────
 CONFIG_DIR    = Path(__file__).parent / "config"
-EXCLUSIONS_FILE  = CONFIG_DIR / "exclusions.yaml"
-SETTINGS_FILE    = CONFIG_DIR / "settings.yaml"
+EXCLUSIONS_FILE      = CONFIG_DIR / "exclusions.yaml"
+SETTINGS_FILE        = CONFIG_DIR / "settings.yaml"
+WIDEN_VERTICALS_FILE = CONFIG_DIR / "widen_verticals.yaml"
 PROMPTS_DIR      = Path(__file__).parent / "prompts"
+
+# ── Coupon selection (search -> reveal redesign) ───────────────────────────────
+# Fetch-size tiers by number of distinct items (stores/verticals) in one query.
+# Index 0 unused; index N = coupons fetched per item when the query has N items.
+COUPON_FETCH_TIERS = {1: 30, 2: 15}
+COUPON_FETCH_TIER_FLOOR = 10  # 3+ items: 10 each
+
+# How many coupons to surface per item in the final answer.
+COUPON_PICK_SINGLE_ITEM = 3
+COUPON_PICK_PER_ITEM    = 2  # when the query has 2+ items

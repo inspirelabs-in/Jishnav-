@@ -1,0 +1,28 @@
+# Verticals where it's safe to substitute a different store's coupon when the
+# requested store has zero live coupons (e.g. RedBus empty -> show AbhiBus).
+# Every store inside these verticals sells the same interchangeable service,
+# so a different provider is a reasonable substitute for what the user asked for.
+#
+# Everything NOT listed here defaults to "never substitute" (the safe default) --
+# e.g. Electronics/Mobiles/Fashion stay never-substitute so "Apple" never falls
+# back to "OPPO" and "Earphones" never falls back to "Mobile Phones".
+widen_ok_vertical_ids:
+  - 2086  # Bus
+  - 2087  # Flight
+  - 2948  # Domestic Flight
+  - 2949  # Domestic Flights
+  - 2950  # International Flights
+  - 2088  # Hotel
+  - 2103  # Cab
+  - 2184  # City Taxi
+  - 2183  # Car Rentals
+  - 4452  # Bike Rentals
+  - 2078  # Recharge
+  - 2162  # Mobile Recharge
+  - 2157  # DTH Recharge
+  - 2164  # Data Card Recharge
+  - 2163  # Postpaid Bill Payments
+  - 2354  # Utility Bill Payments
+  - 2169  # Food Delivery
+  - 2182  # Travel Packages
+  - 2185  # Holiday Packages

@@ -5,13 +5,13 @@ Handles both coupon responses and conversational narrowing questions.
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
 
 import config
+import coupon_tiers
 from llm.factory import get_llm
 import conversation as conv
 import llm_logger
@@ -177,42 +177,32 @@ async def filter_brand_coupons(brand: str, coupons: list[dict]) -> list[dict]:
         return coupons
 
 
-async def _filter_relevant_coupons(coupons: list[dict], user_message: str) -> list[dict]:
+async def _classify_relevant_groups(
+    groups: dict[str, list[str]], user_message: str
+) -> dict[str, list[int]]:
     """
-    Ask gpt-4o-mini which coupons are genuinely relevant to the user's request.
-    Works for routes, cities, user type, dietary preference — anything in the name.
-    Falls back to all coupons on error or if LLM keeps none.
+    One combined gpt-4o-mini call. `groups` maps an item label (e.g. "bus", "hotel",
+    or "_single" for a one-item query) to a list of coupon NAMES ONLY (sitewide and
+    synonym-tier coupons are already pulled out in pure Python before this is called —
+    the LLM's only job is semantic relevance, nothing it could get by exact keyword match).
+    Returns {label: [indices into that group's own list]}. Empty list per group on
+    error or when that item's ask was generic (no specific product/category).
     """
-    def _discount_str(c: dict) -> str:
-        disp = c.get("discount_display") or ""
-        if disp:
-            return disp
-        d = c.get("Discount")
-        return f"{int(d)}% OFF" if d else "flat discount"
-
-    index_map = {}
-    for i, c in enumerate(coupons):
-        index_map[i] = {
-            "store":    c.get("StoreName") or "",
-            "name":     (c.get("CouponName") or "").strip(),
-            "discount": _discount_str(c),
-            "validity": c.get("validity_label") or "No expiry",
-        }
+    non_empty = {k: v for k, v in groups.items() if v}
+    if not non_empty:
+        return {k: [] for k in groups}
 
     prompt = (
-        f"User request: \"{user_message}\"\n\n"
-        f"Here are the coupons retrieved from the database:\n"
-        f"{json.dumps(index_map, indent=2)}\n\n"
-        f"Keep only coupons genuinely relevant to what the user asked for.\n"
-        f"Rules (apply the first rule that fits):\n"
-        f"1. If the user named a specific BRAND or MANUFACTURER (Apple, Samsung, Nike, Puma, etc.):\n"
-        f"   - KEEP if the store name contains the brand. DROP if clearly a different brand.\n"
-        f"2. If the user named specific CATEGORIES or PRODUCTS (school bags, stationery, groceries, clothing, electronics, food, travel, etc.):\n"
-        f"   - KEEP only coupons whose store name or coupon name clearly relates to those categories.\n"
-        f"   - DROP coupons from unrelated categories (e.g. audio apps, ebook stores when user asked for school bags or stationery).\n"
-        f"3. If the user asked for new-user / first-order coupons — keep ONLY coupons whose name mentions first order, new user, welcome, signup.\n"
-        f"4. If the request is completely vague with no brand, category, or product mentioned — keep ALL coupons.\n"
-        f"Return [] only if nothing is genuinely relevant. No explanation — return ONLY a JSON array of indices, e.g. [0, 2, 5]."
+        f"User asked: \"{user_message}\"\n\n"
+        f"Coupon names grouped by item:\n{json.dumps(non_empty, indent=2)}\n\n"
+        f"For EACH group, return the indices (within that group's own list) of coupons "
+        f"that genuinely match what the user asked for regarding that specific item "
+        f"(a brand, product type, or category mentioned in the request).\n"
+        f"If the ask for an item was a generic store-only request with no specific "
+        f"product/category, return [] for that group — a generic ask has nothing to "
+        f"be more specific than.\n"
+        f"Return ONLY a JSON object mapping each group key to an array of indices, e.g. "
+        f'{{"bus": [0, 2], "hotel": []}}. No explanation.'
     )
 
     try:
@@ -222,31 +212,94 @@ async def _filter_relevant_coupons(coupons: list[dict], user_message: str) -> li
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0,
-            max_tokens=200,
+            max_tokens=300,
         )
         llm_logger.log_call(
             model         = "gpt-4o-mini",
-            prompt_file   = "inline: relevance_filter",
-            function_name = "_filter_relevant_coupons",
+            prompt_file   = "inline: tier_relevance",
+            function_name = "_classify_relevant_groups",
             input_tokens  = resp.usage.prompt_tokens     or 0,
             output_tokens = resp.usage.completion_tokens or 0,
         )
         raw = resp.choices[0].message.content or ""
-        # response_format=json_object wraps in an object; extract first array value
         parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            indices = parsed
-        else:
-            indices = next((v for v in parsed.values() if isinstance(v, list)), None)
-        if indices is None:
-            # Couldn't parse response — safe fallback to all
-            return coupons
-        # indices == [] means the LLM intentionally found nothing relevant — respect it
-        filtered = [coupons[i] for i in indices if 0 <= i < len(coupons)]
-        return filtered  # may be []
+        return {
+            k: (parsed.get(k) if isinstance(parsed.get(k), list) else [])
+            for k in groups
+        }
     except Exception as e:
-        log.warning("Relevance filter failed, returning all coupons: %s", e)
-        return coupons
+        log.warning("Relevance classification failed, treating all as non-specific: %s", e)
+        return {k: [] for k in groups}
+
+
+def _discount_value(c: dict) -> float:
+    return float(c.get("Discount") or 0)
+
+
+async def select_top_coupons_for_items(
+    item_coupons: dict[str, list[dict]],
+    user_message: str,
+    quota_per_item: int,
+) -> dict[str, list[dict]]:
+    """
+    4-tier priority fill, per item: sitewide -> relevant -> synonym -> best-discount
+    catch-all. Always tries to fill `quota_per_item` by falling through tiers in
+    order. One combined LLM call covers relevance for every item at once.
+    Dedups by exact CouponCode within each item's result (a coupon picked into an
+    earlier tier is never eligible for a later tier).
+    """
+    per_item_tiers: dict[str, dict] = {}
+    for label, coupons in item_coupons.items():
+        sitewide, synonym, leftover = [], [], []
+        for c in coupons:
+            tier = coupon_tiers.classify_keyword_tier(c.get("CouponName") or "")
+            if tier == "sitewide":
+                sitewide.append(c)
+            elif tier == "synonym":
+                synonym.append(c)
+            else:
+                leftover.append(c)
+        per_item_tiers[label] = {"sitewide": sitewide, "synonym": synonym, "leftover": leftover}
+
+    name_groups = {
+        label: [(c.get("CouponName") or "").strip() for c in t["leftover"]]
+        for label, t in per_item_tiers.items()
+    }
+    relevant_by_item = await _classify_relevant_groups(name_groups, user_message)
+
+    results: dict[str, list[dict]] = {}
+    for label, t in per_item_tiers.items():
+        leftover = t["leftover"]
+        rel_idx  = {i for i in (relevant_by_item.get(label) or []) if 0 <= i < len(leftover)}
+        relevant  = [leftover[i] for i in sorted(rel_idx)]
+        catch_all = [c for i, c in enumerate(leftover) if i not in rel_idx]
+
+        buckets = [t["sitewide"], relevant, t["synonym"], catch_all]
+        for b in buckets:
+            b.sort(key=_discount_value, reverse=True)
+
+        picked: list[dict] = []
+        seen_codes: set[str] = set()
+        for bucket in buckets:
+            if len(picked) >= quota_per_item:
+                break
+            for c in bucket:
+                if len(picked) >= quota_per_item:
+                    break
+                code = (c.get("CouponCode") or "").strip()
+                if code and code in seen_codes:
+                    continue  # already picked in an earlier tier — never show twice
+                seen_codes.add(code)
+                picked.append(c)
+        results[label] = picked
+
+    return results
+
+
+async def select_top_coupons(coupons: list[dict], user_message: str, quota: int = 3) -> list[dict]:
+    """Single-item convenience wrapper around select_top_coupons_for_items."""
+    result = await select_top_coupons_for_items({"_single": coupons}, user_message, quota)
+    return result["_single"]
 
 
 def serialise_coupons(coupons: list[dict]) -> list[dict]:
@@ -266,16 +319,20 @@ async def stream_coupon_response(
     session_id: str,
     coupons: list[dict],
     pending_offer: str = "",
-    skip_relevance_filter: bool = False,
+    quota: int = 3,
+    already_selected: bool = False,
 ) -> AsyncIterator[str | dict]:
     """
     Stream the LLM coupon response.
     Yields str chunks (text tokens) then a final dict {"type": "coupons", "data": [...]}.
-    Pass skip_relevance_filter=True when coupons have already been verified upstream
-    (e.g. via filter_brand_coupons) to avoid double-filtering.
+    By default runs the 4-tier priority selector (sitewide -> relevant -> synonym ->
+    best-discount), always capping to `quota`. Pass already_selected=True only when
+    the caller already ran select_top_coupons_for_items across multiple items and
+    merged the results — re-running selection on a mixed multi-item list would
+    incorrectly apply one item's sitewide/relevance tiering across all of them.
     """
-    if not skip_relevance_filter:
-        coupons = await _filter_relevant_coupons(coupons, user_message)
+    if not already_selected:
+        coupons = await select_top_coupons(coupons, user_message, quota=quota)
     if not coupons:
         yield "I couldn't find coupons that specifically match what you're looking for on GrabOn right now."
         return
@@ -311,198 +368,6 @@ async def stream_coupon_response(
 
     # After text stream, emit structured coupon data
     yield {"type": "coupons", "data": _serialise_coupons(coupons)}
-
-
-async def stream_no_results_response(
-    category: str,
-) -> AsyncIterator[str]:
-    """Inform user no DB coupons found and offer web search. LLM generates the message."""
-    template = _load_prompt("no_results.txt")
-    prompt   = template.replace("{category}", category)
-    llm = get_llm()
-    async for chunk in llm.generate(
-        system_prompt = "You are GrabGPT, a friendly coupon assistant for GrabOn.in.",
-        messages      = [{"role": "user", "content": prompt}],
-        temperature   = 0.3,
-        max_tokens    = 100,
-    ):
-        yield chunk
-    llm_logger.log_call(
-        model         = llm.model,
-        prompt_file   = "no_results.txt",
-        function_name = "stream_no_results_response",
-        input_tokens  = llm.last_usage.get("input_tokens", 0),
-        output_tokens = llm.last_usage.get("output_tokens", 0),
-    )
-
-
-async def stream_dual_no_results_response(
-    category: str,
-    related_label: str,
-) -> AsyncIterator[str]:
-    """No DB coupons for specific category but related exist. Offers related GrabOn deals only."""
-    prompt = (
-        f"We don't have {category} coupons on GrabOn right now, "
-        f"but we have deals for {related_label}. "
-        f"Ask the user if they'd like to see those {related_label} offers instead. "
-        f"Keep it to 2 sentences, warm and natural. No em dashes. No exclamation marks."
-    )
-    llm = get_llm()
-    async for chunk in llm.generate(
-        system_prompt = "You are GrabGPT, a friendly coupon assistant for GrabOn.in.",
-        messages      = [{"role": "user", "content": prompt}],
-        temperature   = 0.3,
-        max_tokens    = 100,
-    ):
-        yield chunk
-    llm_logger.log_call(
-        model         = llm.model,
-        prompt_file   = "inline: dual_no_results",
-        function_name = "stream_dual_no_results_response",
-        input_tokens  = llm.last_usage.get("input_tokens", 0),
-        output_tokens = llm.last_usage.get("output_tokens", 0),
-    )
-
-
-async def stream_clarification_response(
-    category: str,
-) -> AsyncIterator[str]:
-    """User said 'yes' when related offers were on the table — LLM asks them to clarify."""
-    prompt = (
-        f"The user said yes but it's unclear what they want. "
-        f"Ask them to clarify if they want to see the related {category} offers on GrabOn. "
-        f"Keep it short and warm. No em dashes. No exclamation marks."
-    )
-    llm = get_llm()
-    async for chunk in llm.generate(
-        system_prompt = "You are GrabGPT, a friendly coupon assistant for GrabOn.in.",
-        messages      = [{"role": "user", "content": prompt}],
-        temperature   = 0.3,
-        max_tokens    = 100,
-    ):
-        yield chunk
-    llm_logger.log_call(
-        model         = llm.model,
-        prompt_file   = "inline: clarification",
-        function_name = "stream_clarification_response",
-        input_tokens  = llm.last_usage.get("input_tokens", 0),
-        output_tokens = llm.last_usage.get("output_tokens", 0),
-    )
-
-
-_WEB_JUNK_RE = re.compile(
-    r'(https?://|www\.|\.com|\.in|visit deal|visit site|click here|get deal|'
-    r'visit now|check here|click deal|grab deal)',
-    re.I,
-)
-_CODE_LIKE_RE = re.compile(r'\b[A-Z0-9]{4,20}\b')
-
-# Snippets mentioning past years or explicit "expired" wording are unreliable
-_STALE_RE = re.compile(
-    r'\b(expired?|invalid|no longer|202[0-4])\b',
-    re.I,
-)
-
-
-def _extract_codes_from_snippets(web_results: list[dict]) -> list[str]:
-    """Regex-extract alphanumeric coupon codes directly from SearXNG snippets."""
-    _BLOCKLIST = {
-        "HTML", "HTTP", "HTTPS", "DEAL", "COUPON", "OFFER", "VISIT", "CODE",
-        "SAVE", "FREE", "FLAT", "UPTO", "BEST", "ALSO", "APPLY", "LINK",
-        "VIEW", "SALE", "BOOK", "SHOP", "CLICK", "HERE", "PAGE", "READ",
-        "USER", "EMAIL", "LAST", "DAYS", "FROM", "SITE", "MORE", "GRAB",
-        "INDIA", "CASH", "BACK", "NEW", "OLD", "GET", "OFF", "USE",
-    }
-    found = []
-    seen: set[str] = set()
-    for r in web_results:
-        snippet = r.get("title", "") + " " + r.get("content", "")
-        # Skip snippets that mention expiry or past years — likely stale
-        if _STALE_RE.search(snippet):
-            continue
-        text = snippet.upper()
-        for code in _CODE_LIKE_RE.findall(text):
-            if (code not in _BLOCKLIST
-                    and not code.isdigit()      # skip pure numbers like "2026"
-                    and len(code) >= 4
-                    and code not in seen):
-                seen.add(code)
-                found.append(code)
-    return found[:8]
-
-
-async def stream_web_results_response(
-    user_message: str,
-    session_id: str,
-    web_results: list[dict],
-    category: str,
-) -> AsyncIterator[str]:
-    """Present web search results as coupon codes only — no website links."""
-    if not web_results:
-        yield f"No active coupon codes for {category} found right now."
-        return
-
-    # First try regex extraction from snippets (fast, no hallucination risk)
-    regex_codes = _extract_codes_from_snippets(web_results)
-    if regex_codes:
-        lines = [
-            f"Here are some {category} coupon codes I found on the web "
-            f"(not verified by GrabOn — apply at checkout to confirm):\n"
-        ]
-        for code in regex_codes:
-            lines.append(f"**{code}**")
-        yield "\n".join(lines)
-        return
-
-    # Fallback: LLM extraction using prompt file
-    web_context = "\n\n".join(
-        f"Source: {r['title']}\nSnippet: {r['content']}"
-        for r in web_results
-    )
-    prompt_template = _load_prompt("extract_web_codes.txt")
-    system = prompt_template.replace("{web_context}", web_context)
-
-    history  = conv.get_history(session_id)
-    messages = _history_to_messages(history)
-    messages.append({"role": "user", "content": user_message})
-    llm = get_llm()
-
-    buffered = ""
-    async for chunk in llm.generate(
-        system_prompt = system,
-        messages      = messages,
-        temperature   = 0.0,
-        max_tokens    = 300,
-    ):
-        buffered += chunk
-    llm_logger.log_call(
-        model         = llm.model,
-        prompt_file   = "extract_web_codes.txt",
-        function_name = "stream_web_results_response",
-        input_tokens  = llm.last_usage.get("input_tokens", 0),
-        output_tokens = llm.last_usage.get("output_tokens", 0),
-        session_id    = session_id,
-    )
-
-    # Post-filter: remove any line that looks like junk (URLs, "Visit Deal", etc.)
-    if "NO_CODES_FOUND" in buffered.upper() or not buffered.strip():
-        yield f"No active coupon codes for {category} found right now."
-        return
-
-    clean_lines = [
-        line for line in buffered.splitlines()
-        if line.strip() and not _WEB_JUNK_RE.search(line)
-    ]
-
-    if not clean_lines:
-        yield f"No active coupon codes for {category} found right now."
-        return
-
-    header = (
-        f"Here are some {category} coupon codes I found on the web "
-        f"(not verified by GrabOn — use at your own discretion):\n\n"
-    )
-    yield header + "\n".join(clean_lines)
 
 
 def _serialise_coupons(coupons: list[dict]) -> list[dict]:

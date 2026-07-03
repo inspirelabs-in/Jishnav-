@@ -25,28 +25,35 @@ def _load_prompt(filename: str) -> str:
 
 
 def _coupon_summary(coupons: list[dict]) -> str:
-    """Build a compact natural-language summary of the coupon batch for the LLM prompt."""
+    """
+    Compact, fully-accurate natural-language summary for the LLM prompt.
+    The response prompt cites facts straight from this string, so every fact
+    here must be literally true -- an ambiguous or missing figure is exactly
+    what causes the model to invent one instead.
+    """
     if not coupons:
         return "no coupons found"
-    top3      = coupons[:3]
     # Sample stores from the FULL result set, not just the first 3 — when multiple
     # verticals/stores are merged (e.g. Laptop + Cab), the first 3 entries can all
     # belong to whichever group was fetched first, silently hiding the others
     # from the summary the LLM uses to write its opening sentence.
-    stores    = sorted({c.get("StoreName", "") for c in coupons if c.get("StoreName")})
-    n_codes   = sum(1 for c in top3 if (c.get("CouponCode") or "").strip())
-    n_today   = sum(1 for c in coupons if c.get("validity_urgency") == "expires_today")
-    n_soon    = sum(1 for c in coupons if c.get("validity_urgency") == "expires_soon")
+    stores  = sorted({c.get("StoreName", "") for c in coupons if c.get("StoreName")})
+    n_today = sum(1 for c in coupons if c.get("validity_urgency") == "expires_today")
+    n_soon  = sum(1 for c in coupons if c.get("validity_urgency") == "expires_soon")
+    # Only trust Discount as a clean percentage when CouponTypeID says it actually
+    # IS one (type 2) -- some rows store a flat rupee amount or a promo-mechanic ID
+    # in the same column, so "% off" would be a lie for those.
+    pct_discounts = [c.get("Discount") or 0 for c in coupons if c.get("CouponTypeID") == 2]
+    best_pct = max(pct_discounts) if pct_discounts else 0
+
     store_str = ", ".join(stores[:3]) + ("..." if len(stores) > 3 else "")
-    parts     = [f"Found top deals across: {store_str}."]
-    if n_codes:
-        parts.append(f"{n_codes} of the top picks have coupon codes to copy.")
-    else:
-        parts.append("These are deal links (no code needed).")
+    parts = [f"Found top deals across: {store_str}.", f"{len(coupons)} deals found."]
     if n_today:
-        parts.append(f"⚠️ {n_today} expire TODAY — act fast!")
+        parts.append(f"{n_today} expire TODAY.")
     elif n_soon:
         parts.append(f"{n_soon} expiring soon.")
+    if best_pct >= 50:
+        parts.append(f"Top discount: {int(best_pct)}% off.")
     return " ".join(parts)
 
 
@@ -96,6 +103,57 @@ async def stream_narrowing_question(
         model         = llm.model,
         prompt_file   = "narrowing.txt",
         function_name = "stream_narrowing_question",
+        input_tokens  = llm.last_usage.get("input_tokens", 0),
+        output_tokens = llm.last_usage.get("output_tokens", 0),
+        session_id    = session_id,
+    )
+
+
+async def stream_unavailable_response(
+    user_message: str,
+    session_id: str,
+    subject: str,
+) -> AsyncIterator[str]:
+    """
+    Warm, natural "we don't have that right now" reply that explicitly names
+    what was asked for -- never a stock template, never the same wording twice.
+    No alternative store/category is ever suggested; this only declines and
+    invites the user to ask for something else.
+    """
+    prompt = (
+        f"The user asked for coupons related to \"{subject}\", but GrabOn has no "
+        f"active coupon codes for that right now.\n\n"
+        f"Write a warm, natural, one-off reply telling them this plainly and "
+        f"politely. Mention \"{subject}\" by name so they know you understood "
+        f"exactly what they asked for. Do not suggest any other store or "
+        f"category yourself -- just invite them to ask for something else if "
+        f"they'd like.\n\n"
+        f"Vary your phrasing every time, including your OPENING WORDS -- do not "
+        f"default to \"I understand you're looking for...\" or any other fixed "
+        f"opener. Pick a fresh angle each time: sometimes lead with the apology, "
+        f"sometimes with the store name, sometimes with the invitation to ask "
+        f"for something else. Never reuse a stock template.\n\n"
+        f"Max 2 sentences, under 35 words. No em dashes. No exclamation marks. "
+        f"No corporate phrasing (\"I'd be happy to\")."
+    )
+    history  = conv.get_history(session_id)
+    messages = _history_to_messages(history)
+    messages.append({"role": "user", "content": prompt})
+
+    llm = get_llm()
+    full_text = ""
+    async for chunk in llm.generate(
+        system_prompt = "You are GrabGPT, a friendly coupon assistant for GrabOn.in.",
+        messages      = messages,
+        temperature   = 0.8,  # higher than normal -- the whole point is varied phrasing
+        max_tokens    = 80,
+    ):
+        yield chunk
+        full_text += chunk
+    llm_logger.log_call(
+        model         = llm.model,
+        prompt_file   = "inline: unavailable_response",
+        function_name = "stream_unavailable_response",
         input_tokens  = llm.last_usage.get("input_tokens", 0),
         output_tokens = llm.last_usage.get("output_tokens", 0),
         session_id    = session_id,

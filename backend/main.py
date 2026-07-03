@@ -268,8 +268,10 @@ async def chat(req: ChatRequest):
                             return
 
                 brand = route.brand_name_hint or category
-                full_text = f"I don't have active coupon codes for {brand} on GrabOn right now. Is there another store or category I can help you with?"
-                yield _sse_text(full_text)
+                full_text = ""
+                async for chunk in responder.stream_unavailable_response(message, session_id, brand):
+                    yield _sse_text(chunk)
+                    full_text += chunk
                 conv.add_message(session_id, conv.Message(role="user", content=message))
                 conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()
@@ -341,7 +343,13 @@ async def chat(req: ChatRequest):
                         fb_store_name = None
 
                     if not coupons:
-                        yield _sse_text("Sorry, I couldn't find any active offers right now.")
+                        _subject = fb_store_name or _infer_category(message, route)
+                        full_text = ""
+                        async for chunk in responder.stream_unavailable_response(message, session_id, _subject):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        conv.add_message(session_id, conv.Message(role="user", content=message))
+                        conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                         yield _sse_done()
                         return
 
@@ -380,7 +388,14 @@ async def chat(req: ChatRequest):
                     coupons = []
 
                 if not coupons:
-                    yield _sse_text("I couldn't find active coupons for that right now.")
+                    full_text = ""
+                    async for chunk in responder.stream_unavailable_response(
+                        message, session_id, _infer_category(message, route)
+                    ):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                    conv.add_message(session_id, conv.Message(role="user", content=message))
+                    conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                     yield _sse_done()
                     return
 
@@ -680,7 +695,9 @@ async def chat(req: ChatRequest):
                     _coupons_pre_filtered = True
                 else:
                     full_text = ""
-                    async for chunk in _stream_fallback_response(message):
+                    async for chunk in responder.stream_unavailable_response(
+                        message, session_id, route.brand_name_hint
+                    ):
                         yield _sse_text(chunk)
                         full_text += chunk
                     conv.add_message(session_id, conv.Message(role="user", content=message))
@@ -822,16 +839,19 @@ async def chat(req: ChatRequest):
             # suggestions offered — just a natural "don't have that right now."
             if not coupons:
                 full_text = ""
-                # If no store or vertical was identified, the user sent a conversational
-                # message (fine/sure/go/etc.) — don't prefix [CANDIDATE COUPONS: none]
-                # so the LLM handles it naturally instead of firing the empty-coupons rule.
-                _no_context = not route.store_ids and not route.vertical_ids
-                async for chunk in _stream_fallback_response(
-                    message,
-                    candidate_coupons=None if _no_context else "none",
-                ):
-                    yield _sse_text(chunk)
-                    full_text += chunk
+                if route.store_ids or route.vertical_ids:
+                    # We know exactly what they asked for — name it warmly.
+                    _subject = _infer_category(message, route)
+                    async for chunk in responder.stream_unavailable_response(message, session_id, _subject):
+                        yield _sse_text(chunk)
+                        full_text += chunk
+                else:
+                    # No store or vertical was identified — the user sent a conversational
+                    # message (fine/sure/go/etc.). Let the generic fallback prompt handle
+                    # greetings, off-topic questions, and bare affirmations naturally.
+                    async for chunk in _stream_fallback_response(message, candidate_coupons=None):
+                        yield _sse_text(chunk)
+                        full_text += chunk
                 conv.add_message(session_id, conv.Message(role="user", content=message))
                 conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()

@@ -36,8 +36,8 @@ export function InputBar({ onSend, onStop, isLoading, isDark, disabled }: Props)
 
   const canSend = value.trim().length > 0 && !disabled && !isLoading;
 
-  const wrapBg     = isDark ? "bg-[#2f2f2f] border-[#3a3a3a] focus-within:border-[#555]" : "bg-[#f4f4f4] border-[#ddd] focus-within:border-[#bbb]";
-  const textCls    = isDark ? "text-[#ececec] placeholder-[#8e8ea0]" : "text-[#111] placeholder-[#aaa]";
+  const wrapBg     = isDark ? "bg-[#141416] border-[#262629] focus-within:border-[#3a3a3f]" : "bg-white border-[#E4E2DD] focus-within:border-[#c9c5ba]";
+  const textCls    = isDark ? "text-[#EDEDEC] placeholder-[#55555A]" : "text-[#171614] placeholder-[#A6A399]";
 
   return (
     <div className={`relative flex flex-col rounded-2xl border shadow-sm transition-colors ${wrapBg}`}>
@@ -56,17 +56,17 @@ export function InputBar({ onSend, onStop, isLoading, isDark, disabled }: Props)
         {isLoading ? (
           <button
             onClick={onStop}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-white hover:bg-gray-200 transition-colors"
+            className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${isDark ? "bg-[#EDEDEC] hover:bg-white" : "bg-[#171614] hover:bg-black"}`}
             title="Stop generating"
           >
-            <StopIcon />
+            <StopIcon isDark={isDark} />
           </button>
         ) : (
           <button
             onClick={handleSend}
             disabled={!canSend}
             className="w-8 h-8 flex items-center justify-center rounded-full transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{ backgroundColor: canSend ? "#D2E600" : (isDark ? "#444" : "#ccc") }}
+            style={{ backgroundColor: canSend ? "var(--brand)" : (isDark ? "#262629" : "#E4E2DD") }}
             title="Send message"
           >
             <SendIcon active={canSend} />
@@ -87,9 +87,9 @@ function SendIcon({ active }: { active: boolean }) {
   );
 }
 
-function StopIcon() {
+function StopIcon({ isDark }: { isDark: boolean }) {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="#000">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill={isDark ? "#0B0B0C" : "#F7F6F3"}>
       <rect x="4" y="4" width="16" height="16" rx="2" />
     </svg>
   );

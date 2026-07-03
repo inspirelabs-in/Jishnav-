@@ -49,7 +49,7 @@ export function Sidebar({
   if (!isOpen) {
     return (
       <div className={`flex flex-col items-center py-4 px-3 gap-3 h-full w-[60px] shrink-0 border-r ${s.sidebar} ${s.border}`}>
-        <div className="w-9 h-9 rounded-xl bg-[#D2E600] flex items-center justify-center shrink-0">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "var(--brand)" }}>
           <CouponIcon size={26} />
         </div>
         <button onClick={onToggle} className={`w-9 h-9 flex items-center justify-center rounded-xl mt-1 ${s.iconBtn}`} title="Open sidebar">
@@ -69,10 +69,10 @@ export function Sidebar({
       {/* ── Top: Logo + Toggle + Collapse ── */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[#D2E600] flex items-center justify-center shrink-0">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "var(--brand)" }}>
             <CouponIcon size={22} />
           </div>
-          <span className={`text-[17px] font-bold ${s.logoText}`} style={{ fontFamily: "'Inter', sans-serif", letterSpacing: "-0.02em" }}>GrabGPT</span>
+          <span className={`font-display text-[19px] font-medium ${s.logoText}`}>GrabGPT</span>
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -172,41 +172,41 @@ export function Sidebar({
 
 /* ── Theme tokens ── */
 const dark = {
-  sidebar:          "bg-[#171717]",
-  border:           "border-[#2a2a2a]",
-  divider:          "border-[#2a2a2a]",
-  logoText:         "text-[#ececec]",
-  iconBtn:          "text-[#8e8ea0] hover:bg-[#2a2a2a] hover:text-white transition-colors",
-  navItem:          "text-[#b0b0c0] hover:bg-[#2a2a2a]",
-  navIcon:          "text-[#8e8ea0]",
-  sectionLabel:     "text-[#4a4a4a]",
-  emptyText:        "text-[#4a4a4a]",
-  historyItem:      "text-[#c5c5d2] hover:bg-[#2a2a2a]",
-  historyItemActive:"text-white bg-[#2a2a2a] font-medium",
-  darkToggleBtn:    "text-[#8e8ea0] hover:bg-[#2a2a2a] hover:text-[#D2E600] transition-colors",
-  renameInput:      "text-[#ececec]",
-  actionsBg:        "bg-[#2a2a2a] rounded-lg px-0.5",
-  actionBtn:        "text-[#8e8ea0] hover:text-white hover:bg-[#3a3a3a]",
-  deleteBtn:        "text-[#8e8ea0] hover:text-red-400 hover:bg-[#3a3a3a]",
+  sidebar:          "bg-[#0F0F10]",
+  border:           "border-[#232326]",
+  divider:          "border-[#232326]",
+  logoText:         "text-[#EDEDEC]",
+  iconBtn:          "text-[#8A8A8F] hover:bg-[#1C1C1F] hover:text-white transition-colors",
+  navItem:          "text-[#B5B5BA] hover:bg-[#1C1C1F]",
+  navIcon:          "text-[#8A8A8F]",
+  sectionLabel:     "text-[#55555A] font-mono",
+  emptyText:        "text-[#55555A]",
+  historyItem:      "text-[#C2C2C6] hover:bg-[#1C1C1F]",
+  historyItemActive:"text-white bg-[#1C1C1F] font-medium",
+  darkToggleBtn:    "text-[#8A8A8F] hover:bg-[#1C1C1F] hover:text-[#D2E600] transition-colors",
+  renameInput:      "text-[#EDEDEC]",
+  actionsBg:        "bg-[#1C1C1F] rounded-lg px-0.5",
+  actionBtn:        "text-[#8A8A8F] hover:text-white hover:bg-[#262629]",
+  deleteBtn:        "text-[#8A8A8F] hover:text-[#E5595E] hover:bg-[#262629]",
 };
 
 const light = {
-  sidebar:          "bg-[#f9f9f9]",
-  border:           "border-[#e5e5e5]",
-  divider:          "border-[#e5e5e5]",
-  logoText:         "text-[#111]",
-  iconBtn:          "text-[#666] hover:bg-[#ebebeb] hover:text-[#111] transition-colors",
-  navItem:          "text-[#4a4a4a] hover:bg-[#ebebeb]",
-  navIcon:          "text-[#555]",
-  sectionLabel:     "text-[#aaa]",
-  emptyText:        "text-[#bbb]",
-  historyItem:      "text-[#333] hover:bg-[#ebebeb]",
-  historyItemActive:"text-[#111] bg-[#ebebeb] font-medium",
-  darkToggleBtn:    "text-[#666] hover:bg-[#ebebeb] hover:text-[#b8a000] transition-colors",
-  renameInput:      "text-[#111]",
-  actionsBg:        "bg-[#ebebeb] rounded-lg px-0.5",
-  actionBtn:        "text-[#666] hover:text-[#111] hover:bg-[#ddd]",
-  deleteBtn:        "text-[#666] hover:text-red-500 hover:bg-[#ddd]",
+  sidebar:          "bg-[#F7F6F3]",
+  border:           "border-[#E4E2DD]",
+  divider:          "border-[#E4E2DD]",
+  logoText:         "text-[#171614]",
+  iconBtn:          "text-[#6B6963] hover:bg-[#F0EEE9] hover:text-[#171614] transition-colors",
+  navItem:          "text-[#4a4844] hover:bg-[#F0EEE9]",
+  navIcon:          "text-[#6B6963]",
+  sectionLabel:     "text-[#A6A399] font-mono",
+  emptyText:        "text-[#A6A399]",
+  historyItem:      "text-[#33312E] hover:bg-[#F0EEE9]",
+  historyItemActive:"text-[#171614] bg-[#F0EEE9] font-medium",
+  darkToggleBtn:    "text-[#6B6963] hover:bg-[#F0EEE9] hover:text-[#C97F1E] transition-colors",
+  renameInput:      "text-[#171614]",
+  actionsBg:        "bg-[#F0EEE9] rounded-lg px-0.5",
+  actionBtn:        "text-[#6B6963] hover:text-[#171614] hover:bg-[#E4E2DD]",
+  deleteBtn:        "text-[#6B6963] hover:text-[#D33338] hover:bg-[#E4E2DD]",
 };
 
 /* ── Icons ── */

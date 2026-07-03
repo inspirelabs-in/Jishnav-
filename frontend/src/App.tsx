@@ -10,12 +10,11 @@ export default function App() {
     deleteHistory, renameHistory,
   } = useChat();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [isDark, setIsDark] = useState(false);
-
-  const bg = isDark ? "bg-[#212121]" : "bg-[#ffffff]";
+  const [isDark, setIsDark] = useState(true);
 
   return (
-    <div className={`flex h-screen overflow-hidden ${bg}`}>
+    <div className={`flex h-screen overflow-hidden relative ${isDark ? "" : "theme-light"}`} style={{ background: "var(--bg-app)" }}>
+      <div className="grain-overlay" />
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(o => !o)}
@@ -29,7 +28,7 @@ export default function App() {
         onToggleDark={() => setIsDark(d => !d)}
       />
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-[1]">
         <ChatWindow
           messages={messages}
           isLoading={isLoading}

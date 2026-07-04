@@ -172,7 +172,14 @@ async def chat(req: ChatRequest):
             # bus+hotel+food = 3 items); a store-scoped ask is always 1 item.
             _n_items = len(route.vertical_ids) if (route.vertical_ids and not route.store_ids) else 1
             if route.requested_count:
-                limit = route.requested_count
+                # Fetch limit must stay generous even for a small requested count --
+                # the same coupon often appears as several near-duplicate raw rows
+                # (e.g. a sitewide offer re-issued under 3 separate CouponIDs), and
+                # exact-match dedup collapses those down to one. Fetching exactly
+                # "5" when the user asks for 5 codes can leave only 1-2 unique codes
+                # after dedup; fetching a generous multiple gives dedup and tier-fill
+                # enough real candidates to actually reach the requested count.
+                limit  = min(max(route.requested_count * 10, config.COUPON_FETCH_TIERS[1]), 100)
                 _quota = route.requested_count
             else:
                 limit  = _fetch_limit_for_items(_n_items)

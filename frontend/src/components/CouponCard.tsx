@@ -85,7 +85,7 @@ export function CouponManifest({ coupons, isDark }: Props) {
   const dividerCol  = isDark ? "border-[#262629]" : "border-[#E4E2DD]";
 
   return (
-    <div className={`card-resolve rounded-2xl border overflow-hidden ${panelBg}`}>
+    <div className={`rounded-2xl border overflow-hidden ${panelBg}`}>
       {coupons.map((c, i) => (
         <ManifestRow
           key={c.couponId}
@@ -93,6 +93,7 @@ export function CouponManifest({ coupons, isDark }: Props) {
           isDark={isDark}
           bordered={i < coupons.length - 1}
           dividerCol={dividerCol}
+          index={i}
         />
       ))}
     </div>
@@ -100,9 +101,9 @@ export function CouponManifest({ coupons, isDark }: Props) {
 }
 
 function ManifestRow({
-  coupon, isDark, bordered, dividerCol,
+  coupon, isDark, bordered, dividerCol, index,
 }: {
-  coupon: Coupon; isDark: boolean; bordered: boolean; dividerCol: string;
+  coupon: Coupon; isDark: boolean; bordered: boolean; dividerCol: string; index: number;
 }) {
   const [state, setState]   = useState<RevealState>("sealed");
   const [copied, setCopied] = useState(false);
@@ -134,7 +135,8 @@ function ManifestRow({
 
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3.5 ${bordered ? `border-b border-dashed ${dividerCol}` : ""}`}
+      className={`row-zoom-in flex items-center gap-3 px-4 py-3.5 ${bordered ? `border-b border-dashed ${dividerCol}` : ""}`}
+      style={{ animationDelay: `${index * 140}ms` }}
     >
       {/* Item name */}
       <div className="flex items-center gap-2 shrink-0 min-w-[84px] max-w-[38%]">

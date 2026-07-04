@@ -22,12 +22,15 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark }: Prop
   const textColor = isDark ? "text-[#EDEDEC]" : "text-[#171614]";
 
   const lastMsg = messages[messages.length - 1];
+  // The comet ring shows the instant a message starts streaming with no
+  // content yet -- immediate feedback on send, never a blank gap. The
+  // rotating status TEXT only joins in once the backend confirms (via the
+  // "meta" SSE event) that this is a genuine coupon search -- never for
+  // "hi", "what are you", "tell me a joke", or any other conversational
+  // turn that never touches the coupon database. Undefined (not yet known)
+  // is treated the same as false: just the ring, no search phrasing, until
+  // it's confirmed one way or the other.
   const isStreamingEmpty = lastMsg?.isStreaming && !lastMsg?.content;
-  // Only show the search-loading line for genuine coupon searches (set from
-  // the "meta" SSE event right after routing) -- never for "hi", "what are
-  // you", "tell me a joke", or any other conversational turn that never
-  // touches the coupon database. Undefined (not yet known) is treated the
-  // same as false: say nothing until the backend confirms it's a search.
   const isSearching = isStreamingEmpty && lastMsg?.isCouponSearch === true;
   const lastUserMessage = messages[messages.length - 2]?.role === "user"
     ? messages[messages.length - 2].content
@@ -62,9 +65,9 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark }: Prop
             <MessageBubble key={m.id} message={m} isDark={isDark} />
           ))}
 
-          {isSearching && (
+          {isStreamingEmpty && (
             <div className="py-2">
-              <SearchTrace query={lastUserMessage} isDark={isDark} />
+              <SearchTrace query={lastUserMessage} isDark={isDark} showText={!!isSearching} />
             </div>
           )}
 
@@ -82,43 +85,15 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark }: Prop
   );
 }
 
-const SCRAMBLE_CHARS = "!<>-_\\/[]{}=+*^?#$%01";
-
-/** Cipher-decode effect: characters resolve left-to-right through random glyphs. */
-function useScramble(target: string, active: boolean, duration = 420): string {
-  const [display, setDisplay] = useState(active ? "" : target);
-
-  useEffect(() => {
-    if (!active) { setDisplay(target); return; }
-    let frame = 0;
-    const totalFrames = Math.round(duration / 28);
-    const resolveAt = target.split("").map((_, i) =>
-      Math.floor((i / Math.max(target.length, 1)) * totalFrames * 0.55) + totalFrames * 0.3
-    );
-    const interval = setInterval(() => {
-      frame++;
-      let out = "";
-      for (let i = 0; i < target.length; i++) {
-        const ch = target[i];
-        if (ch === " " || ch === '"') { out += ch; continue; }
-        out += frame >= resolveAt[i] ? ch : SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
-      }
-      setDisplay(out);
-      if (frame >= totalFrames) { setDisplay(target); clearInterval(interval); }
-    }, 28);
-    return () => clearInterval(interval);
-  }, [target, active, duration]);
-
-  return display;
-}
-
 /**
  * Search-loading line — a single row, no panel, no background, no numbers.
- * Just the comet-ring logo plus one line of text that cipher-decodes through
- * each processing phase in place (never an accumulating list). Only ever
- * rendered when the backend has confirmed this turn is a real coupon search.
+ * The comet ring shows immediately regardless of query type. The status
+ * text only appears once the backend confirms this is a genuine coupon
+ * search, and rolls between phases like a slot-machine reel -- each new
+ * phrase slides up into a clipped viewport, replacing the last, rather than
+ * an accumulating list or a character-scramble effect.
  */
-function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
+function SearchTrace({ query, isDark, showText }: { query: string; isDark: boolean; showText: boolean }) {
   const trimmed = query.length > 42 ? query.slice(0, 42).trim() + "…" : query;
   const phrases = useMemo(() => [
     trimmed ? `Reading "${trimmed}"` : "Reading your request",
@@ -130,6 +105,7 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
 
   const [phaseIndex, setPhaseIndex] = useState(0);
   useEffect(() => {
+    if (!showText) return;
     setPhaseIndex(0);
     const stepDelays = [900, 1100, 900, 850];
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -139,18 +115,25 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
       timers.push(setTimeout(() => setPhaseIndex(i + 1), elapsed));
     });
     return () => timers.forEach(clearTimeout);
-  }, [phrases]);
+  }, [phrases, showText]);
 
-  const scrambled = useScramble(phrases[phaseIndex], true, 380);
   const textColor = isDark ? "#EDEDEC" : "#171614";
 
   return (
     <div className="flex items-center gap-3">
       <CometRing small />
-      <div className="font-mono text-[13px] flex items-center gap-2" style={{ color: textColor }}>
-        {scrambled}
-        <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>
-      </div>
+      {showText && (
+        <div className="relative overflow-hidden" style={{ height: "1.5em" }}>
+          <div
+            key={phaseIndex}
+            className="slot-roll-in font-mono text-[13px] flex items-center gap-2 whitespace-nowrap"
+            style={{ color: textColor }}
+          >
+            {phrases[phaseIndex]}
+            <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

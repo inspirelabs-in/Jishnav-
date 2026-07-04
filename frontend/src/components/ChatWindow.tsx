@@ -127,13 +127,15 @@ function useCountUp(target: number, active: boolean, duration = 900): number {
 }
 
 /**
- * Agentic reasoning trace — the "watch the AI work" moment.
- * Each line decodes in through a cipher-scramble effect (not a plain fade),
- * and the "scanning" line counts up to the REAL live coupon/store totals
- * fetched from /api/health -- not a fake number, actual backend state.
- * Sequential reveal isn't tied to real SSE progress events (the stream only
- * emits text/coupons/done) -- this is a personalized simulation that
- * gracefully disappears the instant real content starts streaming in.
+ * Neural scan panel — the "watch the AI work" moment, reimagined as a live
+ * instrument readout instead of a checklist. A canvas-rendered network of
+ * nodes twinkles and connects while a scan beam sweeps across (a spatial
+ * visualization of "searching," not text describing it), a large counter
+ * ticks up to the REAL live coupon/store totals pulled from /api/health, and
+ * a single status line below cipher-decodes through each processing phase.
+ * Not tied to real SSE progress events (the stream only emits text/coupons/
+ * done) -- this is a personalized simulation that gracefully disappears the
+ * instant real content starts streaming in.
  */
 function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
   const [stats, setStats] = useState<{ coupons: number; stores: number } | null>(null);
@@ -148,101 +150,148 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
   }, []);
 
   const trimmed = query.length > 42 ? query.slice(0, 42).trim() + "…" : query;
-  const lineTemplates = useMemo(() => [
+  const phrases = useMemo(() => [
     trimmed ? `Reading "${trimmed}"` : "Reading your request",
-    "__SCANNING__",
+    "Cross-referencing the live database",
     "Filtering expired and duplicate codes",
     "Ranking by discount and relevance",
-    "Assembling your best picks",
+    "Locking in your best picks",
   ], [trimmed]);
 
-  const [visibleCount, setVisibleCount] = useState(1);
-
+  const [phaseIndex, setPhaseIndex] = useState(0);
   useEffect(() => {
-    setVisibleCount(1);
-    const stepDelays = [500, 1100, 850, 750];
+    setPhaseIndex(0);
+    const stepDelays = [900, 1100, 900, 850];
     const timers: ReturnType<typeof setTimeout>[] = [];
     let elapsed = 0;
     stepDelays.forEach((d, i) => {
       elapsed += d;
-      timers.push(setTimeout(() => setVisibleCount(i + 2), elapsed));
+      timers.push(setTimeout(() => setPhaseIndex(i + 1), elapsed));
     });
     return () => timers.forEach(clearTimeout);
-  }, [lineTemplates]);
+  }, [phrases]);
 
-  const doneColor   = isDark ? "#55555A" : "#A6A399";
-  const activeColor = isDark ? "#EDEDEC" : "#171614";
+  const coupons = useCountUp(stats?.coupons ?? 0, true, 1100);
+  const stores  = useCountUp(stats?.stores ?? 0, true, 1100);
+  const scrambled = useScramble(phrases[phaseIndex], true, 380);
 
-  const scanIndex   = 1;
-  const scanActive  = visibleCount - 1 >= scanIndex;
-  const coupons     = useCountUp(stats?.coupons ?? 0, scanActive);
-  const stores      = useCountUp(stats?.stores ?? 0, scanActive);
+  const panelBg = isDark ? "#0F0F10" : "#FFFFFF";
+  const border  = isDark ? "#232326" : "#E4E2DD";
 
   return (
-    <div className="relative flex gap-3 items-start overflow-hidden">
-      <div className="trace-sweep" />
-      <CometRing />
-      <div className="flex flex-col gap-1.5 font-mono text-[13px] pt-1">
-        {lineTemplates.slice(0, visibleCount).map((template, i) => {
-          const isActive = i === visibleCount - 1;
-          const isLast   = i === lineTemplates.length - 1 && !isActive;
-          return (
-            <TraceLine
-              key={i}
-              template={template}
-              isActive={isActive}
-              settled={!isActive}
-              color={isActive ? activeColor : doneColor}
-              coupons={coupons}
-              stores={stores}
-              statsReady={!!stats}
-              justSettled={isLast}
-            />
-          );
-        })}
+    <div className="rounded-2xl border overflow-hidden card-resolve" style={{ background: panelBg, borderColor: border }}>
+      <div className="relative" style={{ height: 108 }}>
+        <NeuralScanCanvas isDark={isDark} />
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono font-bold text-[30px] tabular-nums leading-none" style={{ color: "var(--brand)" }}>
+              {stats ? coupons.toLocaleString("en-IN") : "····"}
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--text-2)" }}>
+              live codes · {stats ? stores.toLocaleString("en-IN") : "····"} stores
+            </span>
+          </div>
+        </div>
+        <div className="absolute top-2.5 left-3">
+          <CometRing small />
+        </div>
+      </div>
+      <div className={`px-4 py-2.5 border-t font-mono text-[12.5px] flex items-center gap-2`} style={{ borderColor: border, color: isDark ? "#EDEDEC" : "#171614" }}>
+        <span className="trace-dot shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: "var(--brand)" }} />
+        {scrambled}
+        <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>
       </div>
     </div>
   );
 }
 
-function TraceLine({
-  template, isActive, color, coupons, stores, statsReady,
-}: {
-  template: string; isActive: boolean; settled: boolean; color: string;
-  coupons: number; stores: number; statsReady: boolean; justSettled: boolean;
-}) {
-  const isScanLine = template === "__SCANNING__";
+/**
+ * Canvas-rendered particle network: nodes twinkle, nearby ones connect with
+ * faint lines (a literal "neural pathway" visual), and a soft beam sweeps
+ * left to right, brightening whatever nodes it passes over -- a spatial
+ * metaphor for scanning through thousands of coupons, not a text description
+ * of it. Pure canvas + rAF, no dependencies.
+ */
+function NeuralScanCanvas({ isDark }: { isDark: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Non-numeric lines are static strings -> safe to cipher-decode them.
-  const scrambled = useScramble(isScanLine ? "" : template, isActive && !isScanLine);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-  return (
-    <div className="trace-line flex items-center gap-2.5">
-      <span
-        className={`shrink-0 w-1.5 h-1.5 rounded-full ${isActive ? "trace-dot" : ""}`}
-        style={{ background: isActive ? "var(--brand)" : "var(--success)" }}
-      />
-      {isScanLine ? (
-        <span style={{ color }}>
-          Scanning{" "}
-          <span className="font-bold" style={{ color: "var(--brand)" }}>
-            {statsReady ? coupons.toLocaleString("en-IN") : "…"}
-          </span>{" "}
-          live codes across{" "}
-          <span className="font-bold" style={{ color: "var(--brand)" }}>
-            {statsReady ? stores.toLocaleString("en-IN") : "…"}
-          </span>{" "}
-          stores
-          {isActive && <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>}
-        </span>
-      ) : (
-        <span style={{ color }}>
-          {scrambled}
-          {isActive && <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>}
-        </span>
-      )}
-    </div>
-  );
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const W = rect.width, H = rect.height;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.scale(dpr, dpr);
+
+    const N = 30;
+    const nodes = Array.from({ length: N }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: 1 + Math.random() * 1.6,
+      phase: Math.random() * Math.PI * 2,
+      speed: 0.35 + Math.random() * 0.5,
+    }));
+
+    const brandRGB = "210,230,0";
+    let sweepX = -80;
+    let t = 0;
+    let raf: number;
+
+    const draw = () => {
+      t += 1;
+      sweepX = (sweepX + 1.6) % (W + 160);
+      ctx.clearRect(0, 0, W, H);
+
+      // connections between nearby nodes
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j];
+          const dx = a.x - b.x, dy = a.y - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 50) {
+            ctx.strokeStyle = `rgba(${brandRGB},${(1 - dist / 50) * (isDark ? 0.16 : 0.12)})`;
+            ctx.lineWidth = 0.6;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // scan beam
+      const grad = ctx.createLinearGradient(sweepX - 70, 0, sweepX + 70, 0);
+      grad.addColorStop(0, `rgba(${brandRGB},0)`);
+      grad.addColorStop(0.5, `rgba(${brandRGB},${isDark ? 0.10 : 0.07})`);
+      grad.addColorStop(1, `rgba(${brandRGB},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(sweepX - 70, 0, 140, H);
+
+      // nodes -- twinkle, plus a brightness boost as the beam passes over
+      nodes.forEach(n => {
+        const twinkle = 0.35 + 0.35 * Math.sin(t * 0.03 * n.speed + n.phase);
+        const distFromSweep = Math.abs(n.x - sweepX);
+        const boost = distFromSweep < 40 ? 1 - distFromSweep / 40 : 0;
+        const alpha = Math.min(1, twinkle + boost);
+        const radius = n.r + boost * 1.8;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${brandRGB},${alpha})`;
+        ctx.fill();
+      });
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [isDark]);
+
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />;
 }
 
 /**
@@ -253,9 +302,11 @@ function TraceLine({
  * Three SVG arc segments (far tail → mid → near-head) create a smooth
  * gradient-like fade. A soft bloom + sharp head dot sit at 12 o'clock.
  */
-function CometRing() {
-  const S = 40;
-  const cx = 20, cy = 20, r = 20;
+function CometRing({ small = false }: { small?: boolean }) {
+  const box = small ? 24 : 32;
+  const S = small ? 30 : 40;
+  const cx = S / 2, cy = S / 2, r = S / 2;
+  const offset = -(S - box) / 2;
 
   const pt = (deg: number) => ({
     x: +(cx + r * Math.sin((deg * Math.PI) / 180)).toFixed(3),
@@ -270,11 +321,11 @@ function CometRing() {
   };
 
   return (
-    <div className="shrink-0 relative w-8 h-8" style={{ overflow: "visible" }}>
+    <div className="shrink-0 relative" style={{ width: box, height: box, overflow: "visible" }}>
       <div
         className="absolute animate-spin pointer-events-none"
         style={{
-          top: -4, left: -4, width: S, height: S,
+          top: offset, left: offset, width: S, height: S,
           animationDuration: "1s",
           animationTimingFunction: "linear",
           overflow: "visible",
@@ -312,7 +363,7 @@ function CometRing() {
       </div>
 
       <div className="absolute inset-0 rounded-full flex items-center justify-center z-10" style={{ background: "#D2E600" }}>
-        <CouponIcon size={16} />
+        <CouponIcon size={small ? 13 : 16} />
       </div>
     </div>
   );

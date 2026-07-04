@@ -62,6 +62,14 @@ export function useChat() {
     });
   }, []);
 
+  const setIsCouponSearch = useCallback((id: string, isCouponSearch: boolean) => {
+    setMessages(prev => {
+      const next = prev.map(m => m.id === id ? { ...m, isCouponSearch } : m);
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const finalise = useCallback((id: string) => {
     setMessages(prev => {
       const next = prev.map(m => m.id === id ? { ...m, isStreaming: false } : m);
@@ -124,6 +132,8 @@ export function useChat() {
             try { appendChunk(asstId, JSON.parse(data)); } catch { /* skip */ }
           } else if (event === "coupons") {
             try { setCoupons(asstId, JSON.parse(data)); } catch { /* skip */ }
+          } else if (event === "meta") {
+            try { setIsCouponSearch(asstId, !!JSON.parse(data).isCouponSearch); } catch { /* skip */ }
           } else if (event === "done") {
             finalise(asstId);
           } else if (event === "error") {
@@ -141,7 +151,7 @@ export function useChat() {
       setIsLoading(false);
       finalise(asstId);
     }
-  }, [isLoading, appendChunk, setCoupons, finalise]);
+  }, [isLoading, appendChunk, setCoupons, setIsCouponSearch, finalise]);
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();

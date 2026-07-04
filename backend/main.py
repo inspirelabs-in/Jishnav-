@@ -160,6 +160,13 @@ async def chat(req: ChatRequest):
                      route.is_explicit_web, route.is_explicit_related,
                      route.corrected_query)
 
+            # Tell the frontend up front whether this is a genuine coupon search
+            # (type A = direct store match, type B = direct vertical match) so it
+            # can show the search-loading UI only for real searches -- not for
+            # "hi", "what are you", "tell me a joke", or any other conversational
+            # turn that never touches the coupon database at all.
+            yield _sse_meta({"isCouponSearch": route.query_type in ("A", "B")})
+
             # Shared across all paths that fetch coupons.
             # "Items" = distinct verticals in a store-less multi-vertical ask (e.g.
             # bus+hotel+food = 3 items); a store-scoped ask is always 1 item.

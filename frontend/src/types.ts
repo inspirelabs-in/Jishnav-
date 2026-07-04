@@ -35,4 +35,7 @@ export interface Message {
   coupons?: Coupon[];
   isStreaming?: boolean;
   isWebResult?: boolean;
+  /** Set from the "meta" SSE event, before any text arrives. Undefined until
+   *  known -- treat as "not a search yet" so the loading UI doesn't assume. */
+  isCouponSearch?: boolean;
 }

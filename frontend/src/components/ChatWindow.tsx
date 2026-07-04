@@ -22,7 +22,13 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark }: Prop
   const textColor = isDark ? "text-[#EDEDEC]" : "text-[#171614]";
 
   const lastMsg = messages[messages.length - 1];
-  const isSearching = lastMsg?.isStreaming && !lastMsg?.content;
+  const isStreamingEmpty = lastMsg?.isStreaming && !lastMsg?.content;
+  // Only show the search-loading line for genuine coupon searches (set from
+  // the "meta" SSE event right after routing) -- never for "hi", "what are
+  // you", "tell me a joke", or any other conversational turn that never
+  // touches the coupon database. Undefined (not yet known) is treated the
+  // same as false: say nothing until the backend confirms it's a search.
+  const isSearching = isStreamingEmpty && lastMsg?.isCouponSearch === true;
   const lastUserMessage = messages[messages.length - 2]?.role === "user"
     ? messages[messages.length - 2].content
     : "";
@@ -106,49 +112,13 @@ function useScramble(target: string, active: boolean, duration = 420): string {
   return display;
 }
 
-/** Eased count-up from 0 to a real backend number -- grounds the "AI is working" beat in actual data. */
-function useCountUp(target: number, active: boolean, duration = 900): number {
-  const [value, setValue] = useState(0);
-  useEffect(() => {
-    if (!active || !target) { setValue(0); return; }
-    let start: number | null = null;
-    let raf: number;
-    const step = (ts: number) => {
-      if (start === null) start = ts;
-      const progress = Math.min((ts - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setValue(Math.round(eased * target));
-      if (progress < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [target, active, duration]);
-  return value;
-}
-
 /**
- * Neural scan panel — the "watch the AI work" moment, reimagined as a live
- * instrument readout instead of a checklist. A canvas-rendered network of
- * nodes twinkles and connects while a scan beam sweeps across (a spatial
- * visualization of "searching," not text describing it), a large counter
- * ticks up to the REAL live coupon/store totals pulled from /api/health, and
- * a single status line below cipher-decodes through each processing phase.
- * Not tied to real SSE progress events (the stream only emits text/coupons/
- * done) -- this is a personalized simulation that gracefully disappears the
- * instant real content starts streaming in.
+ * Search-loading line — a single row, no panel, no background, no numbers.
+ * Just the comet-ring logo plus one line of text that cipher-decodes through
+ * each processing phase in place (never an accumulating list). Only ever
+ * rendered when the backend has confirmed this turn is a real coupon search.
  */
 function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
-  const [stats, setStats] = useState<{ coupons: number; stores: number } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/health")
-      .then(r => r.json())
-      .then(d => { if (!cancelled) setStats({ coupons: d.coupons_with_codes, stores: d.stores }); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
   const trimmed = query.length > 42 ? query.slice(0, 42).trim() + "…" : query;
   const phrases = useMemo(() => [
     trimmed ? `Reading "${trimmed}"` : "Reading your request",
@@ -171,33 +141,13 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
     return () => timers.forEach(clearTimeout);
   }, [phrases]);
 
-  const coupons = useCountUp(stats?.coupons ?? 0, true, 1100);
-  const stores  = useCountUp(stats?.stores ?? 0, true, 1100);
   const scrambled = useScramble(phrases[phaseIndex], true, 380);
-
-  const panelBg = isDark ? "#0F0F10" : "#FFFFFF";
-  const border  = isDark ? "#232326" : "#E4E2DD";
+  const textColor = isDark ? "#EDEDEC" : "#171614";
 
   return (
-    <div className="rounded-2xl border overflow-hidden card-resolve" style={{ background: panelBg, borderColor: border }}>
-      <div className="relative" style={{ height: 108 }}>
-        <NeuralScanCanvas isDark={isDark} />
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
-          <div className="flex items-baseline gap-2">
-            <span className="font-mono font-bold text-[30px] tabular-nums leading-none" style={{ color: "var(--brand)" }}>
-              {stats ? coupons.toLocaleString("en-IN") : "····"}
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--text-2)" }}>
-              live codes · {stats ? stores.toLocaleString("en-IN") : "····"} stores
-            </span>
-          </div>
-        </div>
-        <div className="absolute top-2.5 left-3">
-          <CometRing small />
-        </div>
-      </div>
-      <div className={`px-4 py-2.5 border-t font-mono text-[12.5px] flex items-center gap-2`} style={{ borderColor: border, color: isDark ? "#EDEDEC" : "#171614" }}>
-        <span className="trace-dot shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: "var(--brand)" }} />
+    <div className="flex items-center gap-3">
+      <CometRing small />
+      <div className="font-mono text-[13px] flex items-center gap-2" style={{ color: textColor }}>
         {scrambled}
         <span className="trace-cursor" style={{ color: "var(--brand)" }}>▍</span>
       </div>
@@ -206,99 +156,8 @@ function SearchTrace({ query, isDark }: { query: string; isDark: boolean }) {
 }
 
 /**
- * Canvas-rendered particle network: nodes twinkle, nearby ones connect with
- * faint lines (a literal "neural pathway" visual), and a soft beam sweeps
- * left to right, brightening whatever nodes it passes over -- a spatial
- * metaphor for scanning through thousands of coupons, not a text description
- * of it. Pure canvas + rAF, no dependencies.
- */
-function NeuralScanCanvas({ isDark }: { isDark: boolean }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const W = rect.width, H = rect.height;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    ctx.scale(dpr, dpr);
-
-    const N = 30;
-    const nodes = Array.from({ length: N }, () => ({
-      x: Math.random() * W,
-      y: Math.random() * H,
-      r: 1 + Math.random() * 1.6,
-      phase: Math.random() * Math.PI * 2,
-      speed: 0.35 + Math.random() * 0.5,
-    }));
-
-    const brandRGB = "210,230,0";
-    let sweepX = -80;
-    let t = 0;
-    let raf: number;
-
-    const draw = () => {
-      t += 1;
-      sweepX = (sweepX + 1.6) % (W + 160);
-      ctx.clearRect(0, 0, W, H);
-
-      // connections between nearby nodes
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i], b = nodes[j];
-          const dx = a.x - b.x, dy = a.y - b.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 50) {
-            ctx.strokeStyle = `rgba(${brandRGB},${(1 - dist / 50) * (isDark ? 0.16 : 0.12)})`;
-            ctx.lineWidth = 0.6;
-            ctx.beginPath();
-            ctx.moveTo(a.x, a.y);
-            ctx.lineTo(b.x, b.y);
-            ctx.stroke();
-          }
-        }
-      }
-
-      // scan beam
-      const grad = ctx.createLinearGradient(sweepX - 70, 0, sweepX + 70, 0);
-      grad.addColorStop(0, `rgba(${brandRGB},0)`);
-      grad.addColorStop(0.5, `rgba(${brandRGB},${isDark ? 0.10 : 0.07})`);
-      grad.addColorStop(1, `rgba(${brandRGB},0)`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(sweepX - 70, 0, 140, H);
-
-      // nodes -- twinkle, plus a brightness boost as the beam passes over
-      nodes.forEach(n => {
-        const twinkle = 0.35 + 0.35 * Math.sin(t * 0.03 * n.speed + n.phase);
-        const distFromSweep = Math.abs(n.x - sweepX);
-        const boost = distFromSweep < 40 ? 1 - distFromSweep / 40 : 0;
-        const alpha = Math.min(1, twinkle + boost);
-        const radius = n.r + boost * 1.8;
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${brandRGB},${alpha})`;
-        ctx.fill();
-      });
-
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [isDark]);
-
-  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />;
-}
-
-/**
- * Comet ring around the logo, brought back from the original UI at the
- * original brand lime (#D2E600) regardless of theme -- this is the signature
- * loading motif, kept intentionally separate from the muted per-theme accent
- * used elsewhere so the logo never reads as dim during the search moment.
+ * Comet ring around the logo, kept at the original brand lime (#D2E600)
+ * regardless of theme so it never reads as dim during the search moment.
  * Three SVG arc segments (far tail → mid → near-head) create a smooth
  * gradient-like fade. A soft bloom + sharp head dot sit at 12 o'clock.
  */

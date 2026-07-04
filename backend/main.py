@@ -253,6 +253,7 @@ async def chat(req: ChatRequest):
                                 session_id   = session_id,
                                 coupons      = _verified,
                                 quota        = _quota,
+                                store_scoped = True,  # LLM-verified to genuinely be about this one brand
                             ):
                                 if isinstance(chunk, str):
                                     yield _sse_text(chunk)
@@ -305,7 +306,7 @@ async def chat(req: ChatRequest):
                         return
 
                     _selected_by_gen = await responder.select_top_coupons_for_items(
-                        gen_groups, message, quota_per_item=_gen_quota,
+                        gen_groups, message, quota_per_item=_gen_quota, store_scoped=False,
                     )
                     gen_coupons = [c for vname in gen_groups for c in _selected_by_gen.get(vname, [])]
 
@@ -375,6 +376,7 @@ async def chat(req: ChatRequest):
                         session_id   = session_id,
                         coupons      = coupons,
                         quota        = _quota,
+                        store_scoped = bool(fb_sids),
                     ):
                         if isinstance(chunk, str):
                             yield _sse_text(chunk)
@@ -416,6 +418,7 @@ async def chat(req: ChatRequest):
                     user_message = message,
                     session_id   = session_id,
                     coupons      = coupons,
+                    store_scoped = bool(route.store_ids),
                 ):
                     if isinstance(chunk, str):
                         yield _sse_text(chunk)
@@ -520,6 +523,7 @@ async def chat(req: ChatRequest):
                         session_id   = session_id,
                         coupons      = loc_coupons,
                         quota        = _loc_quota,
+                        store_scoped = False,  # location path only ever fires with store_ids empty
                     ):
                         if isinstance(chunk, str):
                             yield _sse_text(chunk)
@@ -535,7 +539,9 @@ async def chat(req: ChatRequest):
                     names_str   = " and ".join(no_specific_names)
                     found_str   = " and ".join(n for n in found_names if n) or "some categories"
 
-                    loc_coupons = await responder.select_top_coupons(loc_coupons, message, quota=_loc_quota)
+                    loc_coupons = await responder.select_top_coupons(
+                        loc_coupons, message, quota=_loc_quota, store_scoped=False,
+                    )
                     intro = f"Here are the {found_str} coupons I found for you:"
                     yield _sse_text(intro)
                     full_text += intro
@@ -837,6 +843,7 @@ async def chat(req: ChatRequest):
                         session_id   = session_id,
                         coupons      = fallback_coupons,
                         quota        = _quota,
+                        store_scoped = True,  # same store as route.store_ids, just filters relaxed
                     ):
                         if isinstance(chunk, str):
                             yield _sse_text(chunk)
@@ -902,10 +909,15 @@ async def chat(req: ChatRequest):
             # selection on the merged list would wrongly apply one item's
             # tiering across all of them, so stream_coupon_response is told
             # the list is already final via already_selected=True.
+            # store_scoped reflects the real routing decision: a store was
+            # named AND we never had to widen out to sibling stores in its
+            # vertical. Multi-vertical asks are never store-scoped -- each
+            # "item" here is a category, not a store the user named.
+            _store_scoped = bool(route.store_ids) and not _widened_from_store
             _already_selected = False
             if _vertical_coupon_groups:
                 _selected_by_item = await responder.select_top_coupons_for_items(
-                    _vertical_coupon_groups, message, quota_per_item=_quota,
+                    _vertical_coupon_groups, message, quota_per_item=_quota, store_scoped=False,
                 )
                 coupons = [
                     c for _vname in _vertical_coupon_groups
@@ -920,6 +932,7 @@ async def chat(req: ChatRequest):
                 pending_offer    = pending,
                 quota            = _quota,
                 already_selected = _already_selected,
+                store_scoped     = _store_scoped,
             ):
                 if isinstance(chunk, str):
                     yield _sse_text(chunk)

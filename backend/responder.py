@@ -229,12 +229,26 @@ async def filter_brand_coupons(brand: str, coupons: list[dict]) -> list[dict]:
         )
         if indices is None:
             return coupons  # parse error → safe fallback
-        # Defensive: the model can occasionally return a malformed shape (e.g. a
-        # nested list) even under json_object mode -- only trust plain ints.
-        return [coupons[i] for i in indices if isinstance(i, int) and 0 <= i < len(coupons)]
+        # Defensive: flatten -- the model can occasionally wrap indices in an
+        # extra list layer (confirmed in production) even under json_object mode.
+        flat = _flatten_ints(indices)
+        return [coupons[i] for i in flat if 0 <= i < len(coupons)]
     except Exception as e:
         log.warning("Brand coupon filter failed, returning all: %s", e)
         return coupons
+
+
+def _flatten_ints(v: list) -> list[int]:
+    """Recursively flatten nested lists down to plain ints, dropping anything else."""
+    out: list[int] = []
+    for item in v:
+        if isinstance(item, bool):
+            continue  # bool is technically an int subclass in Python -- never a valid index
+        if isinstance(item, int):
+            out.append(item)
+        elif isinstance(item, list):
+            out.extend(_flatten_ints(item))
+    return out
 
 
 async def _classify_relevant_groups(
@@ -263,32 +277,55 @@ async def _classify_relevant_groups(
     prompt = (
         f"User asked: \"{user_message}\"\n\n"
         f"Coupons grouped by item, each with its store:\n{json.dumps(non_empty, indent=2)}\n\n"
-        f"For EACH group, return the indices (within that group's own list) of coupons "
-        f"that genuinely match what the user asked for regarding that specific item "
-        f"(a brand, product type, or category mentioned in the request).\n"
-        f"Judge by STORE TYPE, not just literal keyword overlap in the coupon name:\n"
+        f"For EACH group, decide which coupons genuinely match what the user asked for "
+        f"regarding that specific item (a brand, product type, or category mentioned in "
+        f"the request), and return their indices within that group's own list.\n"
+        f"Judge by STORE TYPE and PRODUCT specifics, not just literal keyword overlap:\n"
         f"  - KEEP a store whose business plausibly sells or delivers what was asked, "
         f"even if the coupon text is generic (e.g. a food-delivery platform's 'flat "
         f"50% off orders' coupon is a genuine match for a biriyani/noodles/veg-meal request).\n"
         f"  - EXCLUDE a store whose business is clearly the wrong category for what was "
-        f"asked, even if its coupon looks like a big generic discount (e.g. a bakery or "
-        f"cake shop is NOT a match for a biriyani/noodles request just because it has a "
-        f"sitewide-sounding offer -- wrong kind of business beats any discount size).\n"
+        f"asked, even if its coupon looks like a big generic discount (e.g. a bakery is "
+        f"NOT a match for a biriyani request; a laptop-specific coupon naming a laptop "
+        f"model number is NOT a match for an earbuds/headphones request even though both "
+        f"are 'electronics' -- wrong product beats any discount size).\n"
         f"If the ask for an item was a generic store-only request with no specific "
-        f"product/category, return [] for that group — a generic ask has nothing to "
-        f"be more specific than.\n"
-        f"Return ONLY a JSON object mapping each group key to an array of indices, e.g. "
-        f'{{"bus": [0, 2], "hotel": []}}. No explanation.'
+        f"product/category, return an empty indices list for that group — a generic ask "
+        f"has nothing to be more specific than.\n"
+        f"Return one result entry per group, using the exact group key as \"group\"."
     )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "group":   {"type": "string"},
+                        "indices": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["group", "indices"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["results"],
+        "additionalProperties": False,
+    }
 
     try:
         client = _get_openai()
         resp = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "relevance_classification", "strict": True, "schema": schema},
+            },
             temperature=0,
-            max_tokens=300,
+            max_tokens=800,
         )
         llm_logger.log_call(
             model         = "gpt-4o-mini",
@@ -298,26 +335,41 @@ async def _classify_relevant_groups(
             output_tokens = resp.usage.completion_tokens or 0,
         )
         raw = resp.choices[0].message.content or ""
+        if resp.choices[0].finish_reason == "length":
+            log.warning("Relevance classification hit max_tokens -- response likely truncated")
         parsed = json.loads(raw)
-        # Defensive: only trust plain ints -- the model can occasionally return a
-        # malformed shape (e.g. a nested list) even under json_object mode, and a
-        # non-int index would blow up the range check wherever this is consumed.
-        def _clean(v):
-            return [x for x in v if isinstance(x, int)] if isinstance(v, list) else []
-        return {k: _clean(parsed.get(k)) for k in groups}
+        by_group = {r.get("group"): r.get("indices") for r in parsed.get("results", []) if isinstance(r, dict)}
+        # Structured outputs guarantees the schema (array of plain ints per group),
+        # but still defend against a missing group key (e.g. model renamed it) by
+        # flattening whatever comes back rather than trusting the shape blindly.
+        return {k: (_flatten_ints(by_group[k]) if isinstance(by_group.get(k), list) else []) for k in groups}
     except Exception as e:
         log.warning("Relevance classification failed, treating all as non-specific: %s", e)
         return {k: [] for k in groups}
 
 
-def _discount_value(c: dict) -> float:
-    return float(c.get("Discount") or 0)
+def _discount_value(c: dict) -> tuple[bool, float]:
+    """
+    Sort key for 'best discount' ranking within a tier. Percentage discounts
+    (CouponTypeID 2, a bounded 0-100 scale) always sort ahead of flat-rupee or
+    any other discount type -- a flat Rs 26,000 discount just reflects how
+    expensive the underlying product is (almost always a laptop or similarly
+    big-ticket item), not how good or relevant the deal is. Comparing that raw
+    number against a 50% figure and letting the bigger number win is how an
+    unrelated big-ticket coupon dominates every "best discount" catch-all,
+    including when the whole point of the catch-all was to find something
+    plausible for an unrelated, cheaper product category.
+    """
+    is_pct = c.get("CouponTypeID") == 2
+    value  = float(c.get("Discount") or 0)
+    return (is_pct, value)
 
 
 async def select_top_coupons_for_items(
     item_coupons: dict[str, list[dict]],
     user_message: str,
     quota_per_item: int,
+    store_scoped: bool = False,
 ) -> dict[str, list[dict]]:
     """
     4-tier priority fill, per item: sitewide -> relevant -> synonym -> best-discount
@@ -326,24 +378,23 @@ async def select_top_coupons_for_items(
     Dedups by exact CouponCode within each item's result (a coupon picked into an
     earlier tier is never eligible for a later tier).
 
-    The sitewide/synonym keyword tiers only get priority when a group's pool is
-    a SINGLE store (the user named a store, so "sitewide" means that store's
-    own blanket offer -- inherently relevant). When a pool spans MULTIPLE
-    different stores (a broad vertical with no store named, e.g. "biriyani"
-    resolving to the whole Food vertical), a random store's "sitewide" wording
-    says nothing about whether that store is even the right kind of business
-    for what was asked -- treating it as automatic top priority is how an
-    unrelated bakery's blanket discount out-ranks an actual food-delivery
-    platform for a biriyani search. In that case everything goes through
-    relevance judgment on equal footing instead.
+    The sitewide/synonym keyword tiers only get priority when store_scoped=True
+    -- meaning the CALLER already knows the user named (or was matched to) a
+    specific store, so "sitewide" means that store's own blanket offer,
+    inherently relevant. This must come from the actual routing decision, not
+    be guessed from the data: a broad vertical fetch can easily contain only
+    one store's coupons by coincidence (e.g. "earbuds" resolving to a vertical
+    where HP Shopping happens to be the only store with live codes indexed),
+    and that coincidence has nothing to do with whether the user asked about
+    HP specifically. Trusting "only one MerchantID in this batch" as a proxy
+    for "the user asked for this store" is exactly how an unrelated laptop
+    store's coupon out-ranked genuine earbuds relevance. When store_scoped is
+    False, everything goes through relevance judgment on equal footing.
     """
     per_item_tiers: dict[str, dict] = {}
     for label, coupons in item_coupons.items():
-        merchant_ids = {c.get("MerchantID") for c in coupons if c.get("MerchantID") is not None}
-        single_store = len(merchant_ids) <= 1
-
         sitewide, synonym, leftover = [], [], []
-        if single_store:
+        if store_scoped:
             for c in coupons:
                 tier = coupon_tiers.classify_keyword_tier(c.get("CouponName") or "")
                 if tier == "sitewide":
@@ -395,9 +446,13 @@ async def select_top_coupons_for_items(
     return results
 
 
-async def select_top_coupons(coupons: list[dict], user_message: str, quota: int = 3) -> list[dict]:
+async def select_top_coupons(
+    coupons: list[dict], user_message: str, quota: int = 3, store_scoped: bool = False,
+) -> list[dict]:
     """Single-item convenience wrapper around select_top_coupons_for_items."""
-    result = await select_top_coupons_for_items({"_single": coupons}, user_message, quota)
+    result = await select_top_coupons_for_items(
+        {"_single": coupons}, user_message, quota, store_scoped=store_scoped,
+    )
     return result["_single"]
 
 
@@ -420,6 +475,7 @@ async def stream_coupon_response(
     pending_offer: str = "",
     quota: int = 3,
     already_selected: bool = False,
+    store_scoped: bool = False,
 ) -> AsyncIterator[str | dict]:
     """
     Stream the LLM coupon response.
@@ -429,9 +485,15 @@ async def stream_coupon_response(
     the caller already ran select_top_coupons_for_items across multiple items and
     merged the results — re-running selection on a mixed multi-item list would
     incorrectly apply one item's sitewide/relevance tiering across all of them.
+
+    store_scoped must reflect the actual routing decision (did the user name a
+    specific store?), never be inferred from the coupon data itself -- a broad
+    vertical fetch can coincidentally contain only one store's coupons with no
+    connection to user intent. Defaults to False, the safe choice: relevance
+    leads unless the caller can affirmatively say this pool is one named store.
     """
     if not already_selected:
-        coupons = await select_top_coupons(coupons, user_message, quota=quota)
+        coupons = await select_top_coupons(coupons, user_message, quota=quota, store_scoped=store_scoped)
     if not coupons:
         yield "I couldn't find coupons that specifically match what you're looking for on GrabOn right now."
         return

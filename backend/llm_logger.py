@@ -130,7 +130,7 @@ def log_call(
             wb.save(LOG_FILE)
 
         log.info(
-            "LLM LOG | %-16s | %-30s | in=%-5d out=%-5d | $%.6f | ₹%.4f",
+            "LLM LOG | %-16s | %-30s | in=%-5d out=%-5d | $%.6f | Rs %.4f",
             model, function_name, input_tokens, output_tokens, cost_usd, cost_inr,
         )
 

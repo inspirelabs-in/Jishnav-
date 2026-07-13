@@ -28,11 +28,19 @@ export interface ChatRecord {
   messages: Message[];
 }
 
+export interface CrossSellSuggestion {
+  keyword: string;
+  label: string;
+  store_id: number;
+  store_name: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   coupons?: Coupon[];
+  crossSellSuggestions?: CrossSellSuggestion[];
   isStreaming?: boolean;
   isWebResult?: boolean;
   /** Set from the "meta" SSE event, before any text arrives. Undefined until

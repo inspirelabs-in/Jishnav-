@@ -538,6 +538,93 @@ async def stream_coupon_response(
     yield {"type": "coupons", "data": _serialise_coupons(coupons)}
 
 
+async def get_cross_sell_suggestions(
+    store_name: str,
+    user_query: str,
+    available_keywords: list[str],
+) -> list[dict] | None:
+    """
+    Ask gpt-4o-mini to pick 2-3 meaningful product categories from the store's
+    available coupon keywords that the user hasn't already asked about, and
+    generate a short, varied suggestion chip label for each.
+
+    Returns [{"keyword": "pants", "label": "Pants deals"}, ...] or None on failure.
+    """
+    if not available_keywords:
+        return None
+
+    prompt = (
+        f"The user asked: \"{user_query}\"\n"
+        f"Store: {store_name}\n\n"
+        f"This store also has coupons mentioning these product keywords:\n"
+        f"{json.dumps(available_keywords)}\n\n"
+        f"Pick 2-3 keywords that represent genuinely different PRODUCT CATEGORIES "
+        f"the user might want to explore next on this same store. "
+        f"Rules:\n"
+        f"- Only pick real product/service names (shirts, laptops, flights, pizza, etc.)\n"
+        f"- NEVER pick noise words (rs, off, up, to, get, flat, code, upto, above, etc.)\n"
+        f"- NEVER pick generic discount words or store names\n"
+        f"- Each pick must be a different category from what the user already asked about\n"
+        f"- For each pick, write a short chip label (2-4 words) like "
+        f"\"Shoe deals\", \"Try laptops\", \"Pizza offers\"\n"
+        f"- Vary the label style: sometimes \"X deals\", sometimes \"Try X\", "
+        f"sometimes \"X offers\", sometimes just the category name\n"
+    )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "suggestions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {"type": "string"},
+                        "label": {"type": "string"},
+                    },
+                    "required": ["keyword", "label"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["suggestions"],
+        "additionalProperties": False,
+    }
+
+    try:
+        client = _get_openai()
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "cross_sell_suggestions", "strict": True, "schema": schema},
+            },
+            temperature=0.7,
+            max_tokens=150,
+        )
+        llm_logger.log_call(
+            model         = "gpt-4o-mini",
+            prompt_file   = "inline: cross_sell_suggestions",
+            function_name = "get_cross_sell_suggestions",
+            input_tokens  = resp.usage.prompt_tokens     or 0,
+            output_tokens = resp.usage.completion_tokens or 0,
+        )
+        raw = resp.choices[0].message.content or ""
+        parsed = json.loads(raw)
+        suggestions = parsed.get("suggestions", [])
+        if not suggestions:
+            return None
+        return [
+            {"keyword": s["keyword"].strip(), "label": s["label"].strip()}
+            for s in suggestions
+            if s.get("keyword", "").strip() and s.get("label", "").strip()
+        ][:3] or None
+    except Exception as e:
+        log.warning("Cross-sell suggestion LLM call failed: %s", e)
+        return None
+
+
 def _serialise_coupons(coupons: list[dict]) -> list[dict]:
     """Convert coupon dicts to JSON-safe format for the frontend."""
     safe = []

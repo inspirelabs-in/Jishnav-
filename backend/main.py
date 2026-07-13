@@ -114,6 +114,10 @@ def _sse_error(msg: str) -> str:
     return _sse("error", json.dumps({"message": msg}))
 
 
+def _sse_cross_sell(suggestions: list[dict]) -> str:
+    return _sse("cross_sell", json.dumps(suggestions))
+
+
 def _sse_done() -> str:
     return _sse("done", "{}")
 
@@ -1201,18 +1205,25 @@ async def chat(req: ChatRequest, request: Request):
                 _cs_family = set()
                 for _vid in (route.vertical_ids or []):
                     _cs_family |= vertical_classifier.get_vertical_family(_vid)
-                _cs_keywords = retriever.get_cross_sell_keywords(
+                _cs_raw_keywords = retriever.get_cross_sell_keywords(
                     store_id=route.store_ids[0],
                     user_query=route.corrected_query or message,
                     vertical_family=_cs_family,
                 )
-                if _cs_keywords:
+                if _cs_raw_keywords:
                     _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
-                    _cs_items = ", ".join(_cs_keywords[:3])
-                    _cs_note = f"\n\nWe also have great offers on {_cs_items} at {_cs_store}. Would you like to see them?"
-                    yield _sse_text(_cs_note)
-                    full_text += _cs_note
-                    pending = f"cross_sell:{route.store_ids[0]}:{','.join(_cs_keywords[:3])}"
+                    _cs_suggestions = await responder.get_cross_sell_suggestions(
+                        store_name=_cs_store,
+                        user_query=route.corrected_query or message,
+                        available_keywords=_cs_raw_keywords,
+                    )
+                    if _cs_suggestions:
+                        for s in _cs_suggestions:
+                            s["store_id"] = route.store_ids[0]
+                            s["store_name"] = _cs_store
+                        yield _sse_cross_sell(_cs_suggestions)
+                        _cs_kws = [s["keyword"] for s in _cs_suggestions]
+                        pending = f"cross_sell:{route.store_ids[0]}:{','.join(_cs_kws)}"
 
             await conv.add_message(session_id, conv.Message(role="user", content=message))
             await conv.add_message(session_id, conv.Message(

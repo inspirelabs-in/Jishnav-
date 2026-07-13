@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Coupon, ChatRecord } from "../types";
+import { Message, Coupon, CrossSellSuggestion, ChatRecord } from "../types";
 
 const API_BASE = "/api";
 
@@ -49,6 +49,14 @@ export function useChat({ guestToken, onLimitReached }: UseChatProps) {
   const setCoupons = useCallback((id: string, coupons: Coupon[]) => {
     setMessages(prev => {
       const next = prev.map(m => m.id === id ? { ...m, coupons } : m);
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const setCrossSell = useCallback((id: string, suggestions: CrossSellSuggestion[]) => {
+    setMessages(prev => {
+      const next = prev.map(m => m.id === id ? { ...m, crossSellSuggestions: suggestions } : m);
       messagesRef.current = next;
       return next;
     });
@@ -164,6 +172,8 @@ export function useChat({ guestToken, onLimitReached }: UseChatProps) {
             try { appendChunk(asstId, JSON.parse(data)); } catch { /* skip */ }
           } else if (event === "coupons") {
             try { setCoupons(asstId, JSON.parse(data)); } catch { /* skip */ }
+          } else if (event === "cross_sell") {
+            try { setCrossSell(asstId, JSON.parse(data)); } catch { /* skip */ }
           } else if (event === "meta") {
             try { setIsCouponSearch(asstId, !!JSON.parse(data).isCouponSearch); } catch { /* skip */ }
           } else if (event === "done") {
@@ -184,7 +194,7 @@ export function useChat({ guestToken, onLimitReached }: UseChatProps) {
       setIsLoading(false);
       finalise(asstId);
     }
-  }, [isLoading, guestToken, onLimitReached, appendChunk, setCoupons, setIsCouponSearch, finalise, fetchHistory]);
+  }, [isLoading, guestToken, onLimitReached, appendChunk, setCoupons, setCrossSell, setIsCouponSearch, finalise, fetchHistory]);
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();

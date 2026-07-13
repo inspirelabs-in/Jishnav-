@@ -283,7 +283,7 @@ export function ChatWindow({ messages, isLoading, onSend, onStop, isDark, isLimi
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-5 py-6 space-y-1">
           {messages.map(m => (
-            <MessageBubble key={m.id} message={m} isDark={isDark} />
+            <MessageBubble key={m.id} message={m} isDark={isDark} onSend={onSend} />
           ))}
           {isStreamingEmpty && (
             <div className="py-3 pl-12">

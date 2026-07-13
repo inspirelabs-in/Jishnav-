@@ -34,6 +34,10 @@ _valid_category_ids: set[int] = set()
 # snapshot counts for health check
 _stats: dict[str, int] = {"categories": 0, "stores": 0, "coupons_with_codes": 0}
 
+# store_id → deduplicated, rank-sorted list of coupon dicts (raw DB rows)
+# Keyed by MerchantID so retriever lookups are O(1) per store.
+_coupon_cache: dict[int, list[dict]] = {}
+
 _lock = threading.Lock()
 
 
@@ -122,6 +126,52 @@ def build() -> None:
             if entry not in v2s[vid]:
                 v2s[vid].append(entry)
 
+    # ── Step 4: load ALL active coded coupons and index by MerchantID ─────────
+    _COUPON_FIELDS = """
+        CouponID, MerchantID, CouponName, CouponCode, CouponDescription,
+        CouponTypeID, Discount, MinimumOrderAmount, MaximumDiscount,
+        Verified, Exclusive, HotOffer, BestOffer, CouponVisits,
+        CouponUrl, ForExistingUser, isRecommended, StartDate, EndDate
+    """
+    all_coupon_rows = db.query(f"""
+        SELECT {_COUPON_FIELDS}
+        FROM   {config.COUPONS_TABLE}
+        WHERE  Status = 1
+          AND  (EndDate >= GETDATE() OR EndDate IS NULL)
+          AND  CouponCode IS NOT NULL
+          AND  CouponCode != ''
+    """)
+
+    def _rank_key(r: dict) -> tuple:
+        """Lower = better. Used for deduplication and sort."""
+        return (
+            0 if r.get("Verified") else 1,
+            0 if r.get("BestOffer") else 1,
+            0 if r.get("HotOffer") else 1,
+            -(r.get("Discount") or 0),
+        )
+
+    # Deduplicate by (MerchantID, CouponCode) — keep the highest-ranked row
+    # per pair. This mirrors the SQL ROW_NUMBER() PARTITION BY logic that
+    # previously ran on every single user query.
+    best: dict[tuple, dict] = {}
+    for r in all_coupon_rows:
+        key = (r["MerchantID"], r["CouponCode"])
+        if key not in best or _rank_key(r) < _rank_key(best[key]):
+            best[key] = r
+
+    # Group by MerchantID, rank-sorted so callers can simply slice [:limit]
+    new_coupon_cache: dict[int, list[dict]] = {}
+    for r in best.values():
+        new_coupon_cache.setdefault(r["MerchantID"], []).append(r)
+    for lst in new_coupon_cache.values():
+        lst.sort(key=_rank_key)
+
+    log.info(
+        "Step 4: %d distinct coupons across %d stores loaded into cache",
+        len(best), len(new_coupon_cache),
+    )
+
     with _lock:
         _vertical_to_stores.clear()
         _vertical_to_stores.update(v2s)
@@ -133,13 +183,15 @@ def build() -> None:
         _valid_store_ids.update(valid_stores)
         _valid_category_ids.clear()
         _valid_category_ids.update(valid_cats)
-        _stats["categories"]        = len(v2s)
-        _stats["stores"]            = len(id2name)
-        _stats["coupons_with_codes"] = coupon_count
+        _coupon_cache.clear()
+        _coupon_cache.update(new_coupon_cache)
+        _stats["categories"]         = len(v2s)
+        _stats["stores"]             = len(id2name)
+        _stats["coupons_with_codes"] = len(best)
 
     log.info(
-        "Cache built: %d categories, %d stores, %d coupons with codes",
-        len(v2s), len(id2name), coupon_count,
+        "Cache built: %d categories, %d stores, %d distinct coupons",
+        len(v2s), len(id2name), len(best),
     )
 
 
@@ -179,6 +231,21 @@ def get_stats() -> dict[str, int]:
 def get_all_store_names() -> list[str]:
     with _lock:
         return sorted(_store_id_to_name.values())
+
+
+def get_coupons_for_merchant(merchant_id: int) -> list[dict]:
+    """Return shallow copies of the cached coupon list for one store.
+    Copies are safe for callers to mutate (e.g. _enrich_and_filter_live)
+    without affecting the underlying cache."""
+    with _lock:
+        return [dict(r) for r in _coupon_cache.get(merchant_id, [])]
+
+
+def get_all_coupons_flat() -> list[dict]:
+    """Return a flat list of shallow-copy coupon dicts across all stores.
+    Used for brand-name fallback search when no store ID is known."""
+    with _lock:
+        return [dict(r) for coupons in _coupon_cache.values() for r in coupons]
 
 
 def start_refresh_loop() -> None:

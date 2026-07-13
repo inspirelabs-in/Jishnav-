@@ -54,8 +54,9 @@ async def route(message: str, session_id: str) -> RouteResult:
     """
     r = RouteResult()
 
-    history      = conv.get_history(session_id)
-    last_asst    = conv.last_assistant_message(session_id)
+    history      = await conv.get_history(session_id)
+    last_asst    = await conv.last_assistant_message(session_id)
+
     pending      = last_asst.pending_offer if last_asst else ""
     history_dicts = [{"role": m.role, "content": m.content} for m in history]
 
@@ -202,10 +203,15 @@ async def route(message: str, session_id: str) -> RouteResult:
                 "Tell me a store, category, or what you're looking to save on."
             )
             return r
-        # Real unrecognised brand/product — auto-trigger web search
-        r.query_type      = "D"
-        r.is_explicit_web = True
-        r.pending_offer   = f"web:{r.corrected_query}"
+        # Real unrecognised product/category — ask what they actually want
+        # instead of silently firing a web search that returns "no coupons".
+        r.query_type             = "C"
+        r.needs_clarification    = True
+        r.clarification_question = (
+            "I couldn't find a matching category for that. "
+            "Could you tell me more about what you're looking for? "
+            "For example: fashion, electronics, food, travel, or a specific store?"
+        )
         return r
 
     # Matched verticals exist (and LLM did NOT flag clarification)

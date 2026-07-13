@@ -86,7 +86,7 @@ async def stream_narrowing_question(
         return
 
     # Fallback: ask LLM to generate a narrowing question
-    history  = conv.get_history(session_id)
+    history  = await conv.get_history(session_id)
     messages = _history_to_messages(history)
     messages.append({"role": "user", "content": user_message})
 
@@ -136,7 +136,7 @@ async def stream_unavailable_response(
         f"Max 2 sentences, under 35 words. No em dashes. No exclamation marks. "
         f"No corporate phrasing (\"I'd be happy to\")."
     )
-    history  = conv.get_history(session_id)
+    history  = await conv.get_history(session_id)
     messages = _history_to_messages(history)
     messages.append({"role": "user", "content": prompt})
 
@@ -289,6 +289,9 @@ async def _classify_relevant_groups(
         f"NOT a match for a biriyani request; a laptop-specific coupon naming a laptop "
         f"model number is NOT a match for an earbuds/headphones request even though both "
         f"are 'electronics' -- wrong product beats any discount size).\n"
+        f"  - EXCLUDE a coupon if it is specifically for a DIFFERENT product than the one requested, "
+        f"even if they are in the same general category (e.g. a washing-machine-specific or vacuum-cleaner-specific "
+        f"coupon is NOT a match for a dishwasher request; a TV-specific coupon is NOT a match for a laptop request).\n"
         f"If the ask for an item was a generic store-only request with no specific "
         f"product/category, return an empty indices list for that group — a generic ask "
         f"has nothing to be more specific than.\n"
@@ -344,8 +347,8 @@ async def _classify_relevant_groups(
         # flattening whatever comes back rather than trusting the shape blindly.
         return {k: (_flatten_ints(by_group[k]) if isinstance(by_group.get(k), list) else []) for k in groups}
     except Exception as e:
-        log.warning("Relevance classification failed, treating all as non-specific: %s", e)
-        return {k: [] for k in groups}
+        log.warning("Relevance classification failed, falling back to all-relevant: %s", e)
+        return {k: list(range(len(v))) for k, v in groups.items()}
 
 
 def _discount_value(c: dict) -> tuple[bool, float]:
@@ -424,7 +427,11 @@ async def select_top_coupons_for_items(
         relevant  = [leftover[i] for i in sorted(rel_idx)]
         catch_all = [c for i, c in enumerate(leftover) if i not in rel_idx]
 
-        buckets = [t["sitewide"], relevant, t["synonym"], catch_all]
+        if store_scoped:
+            buckets = [t["sitewide"], relevant, t["synonym"], catch_all]
+        else:
+            buckets = [relevant]
+
         for b in buckets:
             b.sort(key=_discount_value, reverse=True)
 
@@ -500,7 +507,7 @@ async def stream_coupon_response(
 
     coupons  = _prioritise_coupons(coupons)
 
-    history  = conv.get_history(session_id)
+    history  = await conv.get_history(session_id)
     messages = _history_to_messages(history)
     messages.append({"role": "user", "content": user_message})
 

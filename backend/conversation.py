@@ -1,14 +1,12 @@
 """
-Per-session conversation history (in-memory, no persistence).
-Expires sessions after SESSION_TIMEOUT_MINUTES of inactivity.
+Per-session conversation history backed by PostgreSQL.
 """
 
-import threading
 import time
 import logging
+import uuid
 from dataclasses import dataclass, field
-
-import config
+import postgres_db
 
 log = logging.getLogger(__name__)
 
@@ -24,66 +22,75 @@ class Message:
     pending_offer: str               = ""      # what the assistant offered ("hotel coupons", etc.)
     min_discount: float | None       = None    # carried from user's original query through clarification
     timestamp: float                 = field(default_factory=time.time)
+    coupons: list[dict]              = field(default_factory=list)
 
 
-@dataclass
-class Session:
-    messages: list[Message] = field(default_factory=list)
-    last_active: float      = field(default_factory=time.time)
+async def get_history(session_id: str) -> list[Message]:
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        log.warning("Invalid UUID for get_history: %s", session_id)
+        return []
+    
+    rows = await postgres_db.get_messages(session_uuid)
+    messages = []
+    for r in rows:
+        meta = r["metadata"] or {}
+        if isinstance(meta, str):
+            import json
+            meta = json.loads(meta)
+        messages.append(Message(
+
+            role=r["role"],
+            content=r["content"],
+            matched_vertical_ids=meta.get("matched_vertical_ids", []),
+            store_ids=meta.get("store_ids", []),
+            coupon_count=meta.get("coupon_count", 0),
+            was_narrowing=meta.get("was_narrowing", False),
+            pending_offer=meta.get("pending_offer", ""),
+            min_discount=meta.get("min_discount"),
+            timestamp=meta.get("timestamp", r["created_at"].timestamp()),
+            coupons=meta.get("coupons", [])
+        ))
+    return messages
 
 
-_sessions: dict[str, Session] = {}
-_lock = threading.Lock()
+async def add_message(session_id: str, msg: Message) -> None:
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        log.warning("Invalid UUID for add_message: %s", session_id)
+        return
+        
+    message_uuid = uuid.uuid4()
+    metadata = {
+        "matched_vertical_ids": msg.matched_vertical_ids,
+        "store_ids": msg.store_ids,
+        "coupon_count": msg.coupon_count,
+        "was_narrowing": msg.was_narrowing,
+        "pending_offer": msg.pending_offer,
+        "min_discount": msg.min_discount,
+        "timestamp": msg.timestamp,
+        "coupons": msg.coupons
+    }
+    
+    await postgres_db.add_message(message_uuid, session_uuid, msg.role, msg.content, metadata)
+    await postgres_db.update_session_timestamp(session_uuid)
 
 
-def _touch(session_id: str) -> Session:
-    with _lock:
-        if session_id not in _sessions:
-            _sessions[session_id] = Session()
-        s = _sessions[session_id]
-        s.last_active = time.time()
-        return s
-
-
-def get_history(session_id: str) -> list[Message]:
-    s = _touch(session_id)
-    return list(s.messages)
-
-
-def add_message(session_id: str, msg: Message) -> None:
-    s = _touch(session_id)
-    with _lock:
-        s.messages.append(msg)
-        if len(s.messages) > config.MAX_CONVERSATION_TURNS * 2:
-            s.messages = s.messages[-(config.MAX_CONVERSATION_TURNS * 2):]
-
-
-def last_assistant_message(session_id: str) -> Message | None:
-    history = get_history(session_id)
+async def last_assistant_message(session_id: str) -> Message | None:
+    history = await get_history(session_id)
     for m in reversed(history):
         if m.role == "assistant":
             return m
     return None
 
 
-def clear(session_id: str) -> None:
-    with _lock:
-        _sessions.pop(session_id, None)
-
-
-def _evict_loop() -> None:
-    timeout = config.SESSION_TIMEOUT_MINUTES * 60
-    while True:
-        time.sleep(300)
-        now = time.time()
-        with _lock:
-            dead = [sid for sid, s in _sessions.items() if now - s.last_active > timeout]
-            for sid in dead:
-                del _sessions[sid]
-        if dead:
-            log.debug("Evicted %d expired sessions", len(dead))
+async def clear(session_id: str) -> None:
+    # No-op since database does not need eviction
+    pass
 
 
 def start_eviction_loop() -> None:
-    t = threading.Thread(target=_evict_loop, daemon=True)
-    t.start()
+    # No-op since database does not need eviction
+    pass

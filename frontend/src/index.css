@@ -1,189 +1,470 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+@font-face {
+  font-family: "GothamRnd";
+  src: url("/fonts/GothamRnd-Bold.otf") format("opentype");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "GothamRnd";
+  src: url("/fonts/GothamRnd-Medium.otf") format("opentype");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "GothamRnd";
+  src: url("/fonts/GothamRnd-Book.otf") format("opentype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-*, *::before, *::after {
-  box-sizing: border-box;
-}
+*, *::before, *::after { box-sizing: border-box; }
 
+/* ═══ LIGHT MODE TOKENS (default / 99% of users) ═══════════════════ */
 :root {
-  /* ── Dark (default): warm graphite, not flat gray ── */
-  --bg-app:      #0B0B0C;
-  --bg-surface:  #141416;
-  --bg-surface2: #1C1C1F;
-  --border:      #262629;
-  --text-1:      #EDEDEC;
-  --text-2:      #9A9A9F;
-  --text-3:      #55555A;
+  --bg:          #F6F6F4;
+  --surface:     #FFFFFF;
+  --surface-2:   #F1F1EF;
+  --surface-3:   #E9E9E7;
+  --sidebar-bg:  #FFFFFF;
+  --border:      #E4E4E2;
+  --border-2:    #D0D0CE;
 
   --brand:       #D2E600;
-  --brand-ink:   #14150A;
-  --gold:        #E8A33D;
-  --gold-deep:   #C97F1E;
-  --gold-soft:   #3A2E1A;
-  --success:     #3FB67F;
-  --danger:      #E5595E;
+  --brand-dark:  #B8CC00;
+  --brand-ink:   #1A1C00;
+  --brand-10:    rgba(210,230,0,0.10);
+  --brand-15:    rgba(210,230,0,0.15);
+  --brand-20:    rgba(210,230,0,0.20);
+  --brand-30:    rgba(210,230,0,0.30);
+
+  --text-1:      #0D0D0E;
+  --text-2:      #4A4A4A;
+  --text-3:      #8A8A8A;
+  --text-4:      #C0C0C0;
+
+  --green:       #16A34A;
+  --green-10:    rgba(22,163,74,0.10);
+  --gold:        #D97706;
+  --gold-10:     rgba(217,119,6,0.10);
+  --red:         #DC2626;
+  --red-10:      rgba(220,38,38,0.10);
+
+  --shadow-xs:   0 1px 2px rgba(0,0,0,0.05);
+  --shadow-sm:   0 1px 4px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.03);
+  --shadow-md:   0 4px 16px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.05);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.05);
+  --shadow-xl:   0 16px 56px rgba(0,0,0,0.13), 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-brand:0 4px 20px rgba(210,230,0,0.35);
+
+  --ease-out:    cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-inout:  cubic-bezier(0.77, 0, 0.175, 1);
 }
 
-.theme-light {
-  --bg-app:      #F7F6F3;
-  --bg-surface:  #FFFFFF;
-  --bg-surface2: #F0EEE9;
-  --border:      #E4E2DD;
-  --text-1:      #171614;
-  --text-2:      #6B6963;
-  --text-3:      #A6A399;
+/* ═══ DARK MODE TOKENS (1% of users) ═══════════════════════════════ */
+.dark {
+  --bg:          #0D0D0E;
+  --surface:     #161618;
+  --surface-2:   #1E1E20;
+  --surface-3:   #252527;
+  --sidebar-bg:  #111113;
+  --border:      #262628;
+  --border-2:    #363638;
 
   --brand:       #D2E600;
-  --brand-ink:   #14150A;
-  --gold:        #C97F1E;
-  --gold-deep:   #8F5A12;
-  --gold-soft:   #F6E7CE;
-  --success:     #1F9D63;
-  --danger:      #D33338;
+  --brand-dark:  #D2E600;
+  --brand-ink:   #0D0D0E;
+  --brand-10:    rgba(210,230,0,0.08);
+  --brand-15:    rgba(210,230,0,0.12);
+  --brand-20:    rgba(210,230,0,0.18);
+  --brand-30:    rgba(210,230,0,0.28);
+
+  --text-1:      #F2F2F0;
+  --text-2:      #A8A8A6;
+  --text-3:      #626262;
+  --text-4:      #3A3A3A;
+
+  --shadow-xs:   0 1px 2px rgba(0,0,0,0.3);
+  --shadow-sm:   0 1px 4px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2);
+  --shadow-md:   0 4px 16px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+  --shadow-xl:   0 16px 56px rgba(0,0,0,0.7), 0 4px 12px rgba(0,0,0,0.5);
 }
 
+/* ═══ BASE ══════════════════════════════════════════════════════════ */
 html, body, #root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  font-family: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  background: var(--bg-app);
+  height: 100%; margin: 0; padding: 0;
+  font-family: "GothamRnd", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-weight: 400;
+  background: var(--bg);
   color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-
-.font-display { font-family: "Fraunces", Georgia, serif; }
-.font-mono    { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
-
-/* Subtle grain texture — the "intentional decoration" layer instead of gratuitous glow */
-.grain-overlay {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.035;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar { width: 6px; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
-
-/* Smooth textarea resize */
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
 textarea { field-sizing: content; }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   AGENTIC SEARCH TRACE — single slot-machine-style status line
-   ═══════════════════════════════════════════════════════════════════════ */
-
-/* Each new phrase rolls up into a clipped viewport like a slot-machine reel,
-   replacing the last one in place -- not an accumulating list, not a plain
-   fade. React remounts this element on phase change (key={phaseIndex}), so
-   the animation retriggers cleanly every time via fill-mode "both". */
-@keyframes slotRollIn {
-  0%   { opacity: 0; transform: translateY(70%); filter: blur(2px); }
-  60%  { filter: blur(0); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-.slot-roll-in {
-  animation: slotRollIn 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+/* ═══ WELCOME SCREEN BG GRADIENT ════════════════════════════════════ */
+.welcome-bg {
+  background:
+    radial-gradient(ellipse 80% 60% at 110% -10%, rgba(210,230,0,0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at -10% 110%, rgba(210,230,0,0.10) 0%, transparent 50%),
+    var(--bg);
 }
 
-@keyframes traceCursorBlink {
+/* ═══ ANIMATIONS ════════════════════════════════════════════════════ */
+
+/* Page entrance */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 420ms var(--ease-out) both; }
+
+/* Logo float */
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-8px); }
+}
+.float-y { animation: floatY 3.8s ease-in-out infinite; }
+
+/* Chip pop */
+@keyframes chipPop {
+  from { opacity: 0; transform: translateY(12px) scale(0.94); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.chip-pop { animation: chipPop 360ms var(--ease-spring) both; }
+
+/* Typewriter cursor */
+@keyframes twBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100%{ opacity: 0; }
+}
+.tw-cursor {
+  display: inline-block; width: 2px; height: 1.05em;
+  background: var(--brand-dark); margin-left: 1px; vertical-align: text-bottom;
+  animation: twBlink 0.85s step-end infinite;
+}
+
+/* Cinematic reveal */
+@keyframes cinematicReveal {
+  0% {
+    opacity: 0;
+    filter: blur(12px);
+    transform: scale(0.65) translateY(10px);
+    color: var(--brand-dark);
+  }
+  50% {
+    filter: blur(2px);
+    color: var(--brand);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: scale(1) translateY(0);
+    color: var(--text-3);
+  }
+}
+.animate-cinematic-reveal {
+  animation: cinematicReveal 900ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+/* Sidebar slide */
+@keyframes slideInX {
+  from { opacity: 0; transform: translateX(-100%); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.sidebar-in { animation: slideInX 260ms var(--ease-drawer) both; }
+
+/* History item */
+@keyframes histIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.hist-in { animation: histIn 200ms var(--ease-out) both; }
+
+/* Message arrival */
+@keyframes msgUser {
+  from { opacity: 0; transform: translateX(14px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes msgBot {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.msg-user { animation: msgUser 180ms var(--ease-out) both; }
+.msg-bot  { animation: msgBot  220ms var(--ease-out) both; }
+
+/* Streaming cursor */
+@keyframes streamBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.stream-cursor {
+  display: inline-block; width: 2px; height: 1em;
+  margin-left: 2px; vertical-align: middle;
+  background: var(--brand-dark); border-radius: 1px;
+  animation: streamBlink 0.75s ease-in-out infinite;
+}
+
+/* Deal card entrance */
+@keyframes cardRise {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.card-rise { animation: cardRise 400ms var(--ease-spring) both; }
+
+/* Shimmer (skeleton/sealed code) */
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(100deg,
+    var(--surface-2) 30%,
+    var(--border) 48%,
+    var(--surface-2) 62%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* Code wipe reveal */
+@keyframes wipeReveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0% 0 0); }
+}
+.wipe-in { animation: wipeReveal 400ms var(--ease-inout) forwards; }
+
+/* Copy flash */
+@keyframes copyFlash {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(0.93); }
+  70%  { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+.copy-flash { animation: copyFlash 300ms var(--ease-spring) both; }
+
+/* Stamp */
+@keyframes stampIn {
+  from { opacity: 0; transform: scale(1.5) rotate(-15deg); }
+  60%  { opacity: 1; transform: scale(0.93) rotate(-9deg); }
+  to   { opacity: 1; transform: scale(1) rotate(-10deg); }
+}
+.stamp-in { animation: stampIn 380ms var(--ease-spring) both; }
+
+/* Confetti burst helper */
+@keyframes confettiPop {
+  from { opacity: 0; transform: scale(0.5) translateY(0); }
+  to   { opacity: 1; transform: scale(1) translateY(-20px); }
+}
+
+/* Search pill */
+@keyframes pillIn {
+  from { opacity: 0; transform: scale(0.94) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.pill-in { animation: pillIn 280ms var(--ease-spring) both; }
+
+/* Dot pulse */
+@keyframes dotPulse {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.25; }
+  40%           { transform: scale(1);   opacity: 1; }
+}
+.dp1 { animation: dotPulse 1.3s ease-in-out 0ms   infinite; }
+.dp2 { animation: dotPulse 1.3s ease-in-out 180ms infinite; }
+.dp3 { animation: dotPulse 1.3s ease-in-out 360ms infinite; }
+
+/* Trace glyph */
+@keyframes glyphSpin {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-1.5px); }
+}
+.glyph-spin { animation: glyphSpin 0.09s linear infinite; }
+
+/* Trace cursor */
+@keyframes traceBlink {
   0%, 45% { opacity: 1; }
   50%, 95% { opacity: 0; }
-  100%    { opacity: 1; }
+  100% { opacity: 1; }
 }
-.trace-cursor { animation: traceCursorBlink 1s step-end infinite; }
+.trace-cursor { animation: traceBlink 1s step-end infinite; }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   PARTICLE-RESOLVE — coupon cards materialize from a dot-matrix dissolve
-   ═══════════════════════════════════════════════════════════════════════ */
-
-/* Each manifest row pops in one at a time (staggered via inline animation-delay
-   set per index) -- a confident zoom+fade with a slight overshoot, not a plain
-   linear scale, so each pick feels individually "placed" rather than the whole
-   list appearing as one flat block. */
-@keyframes rowZoomIn {
-  0%   { opacity: 0; transform: scale(0.82) translateY(6px); filter: blur(3px); }
-  65%  { opacity: 1; filter: blur(0); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
+/* Trace agent label */
+@keyframes agentLabelIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 0.7; transform: translateY(0); }
 }
-.row-zoom-in {
-  animation: rowZoomIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-  transform-origin: center left;
+.agent-label { animation: agentLabelIn 300ms var(--ease-out) forwards; }
+
+/* Pulse ring */
+@keyframes pulseRing {
+  0%   { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+.pulse-ring { animation: pulseRing 1.8s var(--ease-out) infinite; }
+
+/* Icon flip */
+@keyframes iconFlip {
+  0%   { transform: rotateY(0deg); }
+  50%  { transform: rotateY(90deg); }
+  100% { transform: rotateY(0deg); }
+}
+.icon-flip { animation: iconFlip 300ms var(--ease-out) both; }
+
+/* ═══ INTERACTIVE ELEMENTS ══════════════════════════════════════════ */
+
+/* All interactive elements get press feedback */
+.pressable {
+  transition: transform 140ms var(--ease-out);
+}
+.pressable:active { transform: scale(0.96) !important; }
+
+/* Input glow */
+.input-shell {
+  transition: box-shadow 150ms var(--ease-out), border-color 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+.input-shell:focus-within {
+  box-shadow: 0 0 0 3px var(--brand-20), var(--shadow-md);
+  border-color: var(--brand-dark) !important;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   COUPON CARD — sealed / revealing / revealed states
-   ═══════════════════════════════════════════════════════════════════════ */
-
-.coupon-card-outer {
-  transition: box-shadow 0.25s ease, transform 0.18s ease, border-color 0.25s ease;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.24);
+/* Send button */
+.send-btn {
+  transition: transform 140ms var(--ease-out), box-shadow 140ms var(--ease-out), background 140ms var(--ease-out);
 }
-.coupon-card-outer:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 28px rgba(0,0,0,0.28);
+@media (hover: hover) and (pointer: fine) {
+  .send-btn:hover { box-shadow: var(--shadow-brand); }
+}
+.send-btn:active { transform: scale(0.90); }
+
+/* Nav / history items */
+.nav-row {
+  transition: background 130ms var(--ease-out), color 130ms var(--ease-out), box-shadow 130ms var(--ease-out);
+  position: relative; overflow: hidden;
+}
+@media (hover: hover) and (pointer: fine) {
+  .nav-row:hover { background: var(--surface-2); }
+}
+/* Active indicator bar */
+.nav-row.active {
+  background: var(--brand-10);
+  box-shadow: inset 3px 0 0 var(--brand-dark);
+  color: var(--text-1) !important;
+  font-weight: 500;
 }
 
-/* Perforation notches — literal "ticket stub" motif, tied to the coupon domain */
-.stub-notch {
+/* Suggestion chips */
+.sug-chip {
+  transition: background 140ms var(--ease-out), border-color 140ms var(--ease-out),
+              transform 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .sug-chip:hover {
+    transform: translateY(-3px);
+    border-color: var(--brand-dark);
+    box-shadow: var(--shadow-md), 0 0 0 3px var(--brand-10);
+    background: var(--surface);
+  }
+}
+.sug-chip:active { transform: scale(0.97); }
+
+/* Icon buttons */
+.icon-btn {
+  transition: background 130ms var(--ease-out), color 130ms var(--ease-out), transform 130ms var(--ease-out);
+}
+.icon-btn:active { transform: scale(0.88); }
+@media (hover: hover) and (pointer: fine) {
+  .icon-btn:hover { background: var(--surface-2); }
+}
+
+/* ═══ DEAL TICKET CARD ══════════════════════════════════════════════ */
+
+/* Container card */
+.deal-card {
+  transition: transform 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+  box-shadow: var(--shadow-sm);
+}
+@media (hover: hover) and (pointer: fine) {
+  .deal-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+/* Perforation line (dashed divider between left and right zones) */
+.perf-line {
+  position: relative;
+}
+.perf-line::before,
+.perf-line::after {
+  content: "";
   position: absolute;
-  top: 50%;
-  width: 14px;
-  height: 14px;
+  width: 14px; height: 14px;
   border-radius: 50%;
-  background: var(--bg-app);
-  transform: translateY(-50%);
-  z-index: 2;
+  background: var(--bg);
+  left: -7px; z-index: 2;
 }
+.perf-line::before { top: -7px; }
+.perf-line::after  { bottom: -7px; }
 
-/* Redacted code strip — masked characters as solid ticks, last chars legible */
-@keyframes redactShimmer {
-  0%   { background-position: -120% 0; }
-  100% { background-position: 220% 0; }
-}
-.redacted-strip {
-  background-image: linear-gradient(
-    100deg,
-    var(--bg-surface2) 35%,
-    var(--border) 48%,
-    var(--bg-surface2) 62%
+/* Sealed code shimmer zone */
+.code-sealed {
+  background: linear-gradient(100deg,
+    var(--surface-2) 30%,
+    var(--border) 46%,
+    var(--surface-2) 62%
   );
-  background-size: 260% 100%;
-  animation: redactShimmer 3.2s ease-in-out infinite;
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+  border-radius: 8px;
 }
 
-/* Unlock flash — brief gold sweep the instant a card is revealed */
+/* Unlock flash */
 @keyframes unlockFlash {
-  0%   { opacity: 0; transform: scaleX(0.3); }
+  0%   { opacity: 0; transform: scaleX(0.15); }
   35%  { opacity: 1; }
   100% { opacity: 0; transform: scaleX(1); }
 }
 .unlock-flash {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(100deg, transparent, rgba(232,163,61,0.35), transparent);
-  transform-origin: left center;
-  animation: unlockFlash 0.6s ease-out both;
+  position: absolute; inset: 0; border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(210,230,0,0.5), transparent);
+  transform-origin: left;
+  animation: unlockFlash 600ms var(--ease-out) both;
   pointer-events: none;
 }
 
-/* Redeemed stamp — rotated ink-stamp mark once a code is permanently revealed */
-@keyframes stampIn {
-  0%   { opacity: 0; transform: scale(1.6) rotate(-14deg); }
-  60%  { opacity: 1; transform: scale(0.94) rotate(-10deg); }
-  100% { opacity: 1; transform: scale(1) rotate(-10deg); }
+/* Reveal button */
+.reveal-btn {
+  transition: background 140ms var(--ease-out), color 140ms var(--ease-out),
+              transform 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
 }
-.stamp-in { animation: stampIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+@media (hover: hover) and (pointer: fine) {
+  .reveal-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-brand);
+  }
+}
+.reveal-btn:active { transform: scale(0.95); }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   CONFETTI (copy celebration) — kept, recolored per palette in JS
-   ═══════════════════════════════════════════════════════════════════════ */
+/* Deal panel header */
+.deal-panel-header {
+  background: linear-gradient(135deg, var(--brand-10) 0%, transparent 100%);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ═══ REDUCED MOTION ════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

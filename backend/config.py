@@ -20,8 +20,25 @@ DB_PASSWORD = _req("DB_PASSWORD")
 DB_DRIVER   = os.getenv("DB_DRIVER", "ODBC Driver 17 for SQL Server")
 DB_ENCRYPT  = os.getenv("DB_ENCRYPT", "yes")
 
+# ── PostgreSQL Database ────────────────────────────────────────────────────────
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_DB   = os.getenv("POSTGRES_DB", "grabgpt")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+
+# ── Auth Config ────────────────────────────────────────────────────────────────
+AUTH_SESSION_ENDPOINT = os.getenv("AUTH_SESSION_ENDPOINT", "http://localhost:8743/api/mock/auth-session")
+AUTH_GOOGLE_ENDPOINT  = os.getenv("AUTH_GOOGLE_ENDPOINT", "http://localhost:8743/api/mock/auth-google")
+SESSION_COOKIE_NAME   = os.getenv("SESSION_COOKIE_NAME", "grabon_session")
+SESSION_COOKIE_DOMAIN = os.getenv("SESSION_COOKIE_DOMAIN", "localhost")
+GOOGLE_CLIENT_ID      = os.getenv("GOOGLE_CLIENT_ID", "placeholder-google-client-id")
+USER_ID_FIELD         = os.getenv("USER_ID_FIELD", "user_id")
+MOCK_AUTH_ENABLED     = os.getenv("MOCK_AUTH_ENABLED", "true").lower() == "true"
+
 CATEGORIES_TABLE = os.getenv("CATEGORIES_TABLE", "dbo.Category")
 COUPONS_TABLE    = os.getenv("COUPONS_TABLE", "dbo.Coupon")
+
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
@@ -47,7 +64,7 @@ SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
 # ── Server ─────────────────────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")
 API_HOST             = os.getenv("API_HOST", "0.0.0.0")
-API_PORT             = int(os.getenv("API_PORT", "8000"))
+API_PORT             = int(os.getenv("API_PORT", "8743"))
 
 # ── Config file paths ──────────────────────────────────────────────────────────
 CONFIG_DIR    = Path(__file__).parent / "config"

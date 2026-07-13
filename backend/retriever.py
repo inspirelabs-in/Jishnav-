@@ -8,17 +8,32 @@ import logging
 
 import config
 import cache
-import db
 import validity
 
 log = logging.getLogger(__name__)
 
-_COUPON_FIELDS = """
-    CouponID, MerchantID, CouponName, CouponCode, CouponDescription,
-    CouponTypeID, Discount, MinimumOrderAmount, MaximumDiscount,
-    Verified, Exclusive, HotOffer, BestOffer, CouponVisits,
-    CouponUrl, ForExistingUser, isRecommended, StartDate, EndDate
-"""
+
+
+def _enrich_and_filter_live(rows: list[dict]) -> list[dict]:
+    """
+    Shared post-processing for every fetch function: attach StoreName, run
+    the validity heuristic, and drop expired rows. Also drops rows whose
+    MerchantID doesn't resolve to any known StoreName -- an orphaned/inactive
+    merchant reference (confirmed in production: two "Amazon Pay Offer"
+    coupons pointed at MerchantIDs with no active Category row at all, so
+    they rendered with a blank store name in the UI). A coupon we can't
+    attribute to a real store should never reach the user regardless of
+    which query surfaced it.
+    """
+    live = []
+    for r in rows:
+        r["StoreName"] = cache.get_store_name(r["MerchantID"])
+        if not r["StoreName"]:
+            continue
+        validity.enrich_coupon(r)
+        if r.get("validity_urgency") != "expired":
+            live.append(r)
+    return live
 
 
 async def get_coupons_for_stores(
@@ -31,50 +46,36 @@ async def get_coupons_for_stores(
         return []
 
     limit = limit or config.COUPON_RETRIEVAL_LIMIT
-    placeholders = ",".join("?" * len(store_ids))
 
-    extra_filter = ""
-    params = list(store_ids)
+    # Pull from in-memory cache (already deduplicated and rank-sorted at build time).
+    # Each call to get_coupons_for_merchant returns shallow copies, so
+    # _enrich_and_filter_live can safely mutate them without touching the cache.
+    rows: list[dict] = []
+    for sid in store_ids:
+        rows.extend(cache.get_coupons_for_merchant(sid))
 
-    # Always return only copyable codes — never deal links
-    extra_filter += " AND CouponCode IS NOT NULL AND CouponCode != ''"
-
+    # Apply optional filters — same logic previously expressed in SQL WHERE clauses.
     if for_existing_user is not None:
-        extra_filter += " AND ForExistingUser = ?"
-        params.append(1 if for_existing_user else 0)
+        want = 1 if for_existing_user else 0
+        rows = [r for r in rows if r.get("ForExistingUser") == want]
 
     if min_discount is not None:
-        # Include coupons that meet the percentage threshold OR have no percentage value
-        # (flat-amount coupons like "Rs 500 OFF" store NULL in Discount — they can't be
-        # compared by percentage and should always pass through alongside the filtered results).
-        extra_filter += " AND (Discount IS NULL OR Discount = 0 OR Discount >= ?)"
-        params.append(min_discount)
+        # Pass flat-amount coupons (NULL / 0 Discount) through alongside percentage
+        # matches, mirroring: (Discount IS NULL OR Discount = 0 OR Discount >= ?).
+        rows = [
+            r for r in rows
+            if not r.get("Discount") or r["Discount"] >= min_discount
+        ]
 
-    sql = f"""
-        SELECT TOP {limit} {_COUPON_FIELDS}
-        FROM   {config.COUPONS_TABLE}
-        WHERE  MerchantID IN ({placeholders})
-          AND  Status = 1
-          AND  (EndDate >= GETDATE() OR EndDate IS NULL)
-          {extra_filter}
-        ORDER BY
-          CASE WHEN CouponCode IS NOT NULL AND CouponCode != '' THEN 0 ELSE 1 END,
-          CASE WHEN Verified = 1 THEN 0 ELSE 1 END,
-          CASE WHEN BestOffer = 1 THEN 0 ELSE 1 END,
-          CASE WHEN HotOffer  = 1 THEN 0 ELSE 1 END,
-          ISNULL(Discount, 0) DESC
-    """
+    # Re-sort across all merged store lists, then apply limit.
+    rows.sort(key=lambda r: (
+        0 if r.get("Verified") else 1,
+        0 if r.get("BestOffer") else 1,
+        0 if r.get("HotOffer") else 1,
+        -(r.get("Discount") or 0),
+    ))
 
-    rows = await db.async_query(sql, tuple(params))
-
-    live = []
-    for r in rows:
-        r["StoreName"] = cache.get_store_name(r["MerchantID"])
-        validity.enrich_coupon(r)
-        if r.get("validity_urgency") != "expired":
-            live.append(r)
-
-    return live
+    return _enrich_and_filter_live(rows[:limit])
 
 
 async def get_coupons_for_verticals(
@@ -102,46 +103,38 @@ async def _get_coupons_with_like_filter(
     min_discount: float | None,
     limit: int,
 ) -> list[dict]:
-    """Fetch coupons where CouponName contains at least one of the location keywords."""
+    """Filter cached coupons for the given stores where CouponName contains
+    ALL location keywords (AND logic). Multiple keywords = route query
+    (e.g. Hyderabad + Mumbai); single keyword = city query — same semantics
+    as the original SQL LIKE clauses joined by AND."""
     if not store_ids or not keywords:
         return []
 
-    placeholders  = ",".join("?" * len(store_ids))
-    # Multiple keywords = route query (Hyderabad + Mumbai) → require ALL to appear (AND).
-    # Single keyword = city query (Mumbai) → just match that city (effectively OR of one).
-    like_clauses  = " AND ".join(["CouponName LIKE ?" for _ in keywords])
-    like_params   = [f"%{kw}%" for kw in keywords]
+    # Gather from cache
+    rows: list[dict] = []
+    for sid in store_ids:
+        rows.extend(cache.get_coupons_for_merchant(sid))
 
-    extra_filter = ""
-    extra_params: list = []
+    # Keyword filter: every keyword must appear in CouponName (case-insensitive)
+    kw_lower = [kw.lower() for kw in keywords]
+    rows = [
+        r for r in rows
+        if all(kw in (r.get("CouponName") or "").lower() for kw in kw_lower)
+    ]
+
     if min_discount is not None:
-        extra_filter = " AND (Discount IS NULL OR Discount = 0 OR Discount >= ?)"
-        extra_params.append(min_discount)
+        rows = [
+            r for r in rows
+            if not r.get("Discount") or r["Discount"] >= min_discount
+        ]
 
-    sql = f"""
-        SELECT TOP {limit} {_COUPON_FIELDS}
-        FROM   {config.COUPONS_TABLE}
-        WHERE  MerchantID IN ({placeholders})
-          AND  Status = 1
-          AND  (EndDate >= GETDATE() OR EndDate IS NULL)
-          AND  CouponCode IS NOT NULL AND CouponCode != ''
-          AND  ({like_clauses})
-          {extra_filter}
-        ORDER BY
-          CASE WHEN Verified  = 1 THEN 0 ELSE 1 END,
-          CASE WHEN BestOffer = 1 THEN 0 ELSE 1 END,
-          CASE WHEN HotOffer  = 1 THEN 0 ELSE 1 END,
-          ISNULL(Discount, 0) DESC
-    """
-
-    rows = await db.async_query(sql, tuple(list(store_ids) + like_params + extra_params))
-    live = []
-    for r in rows:
-        r["StoreName"] = cache.get_store_name(r["MerchantID"])
-        validity.enrich_coupon(r)
-        if r.get("validity_urgency") != "expired":
-            live.append(r)
-    return live
+    rows.sort(key=lambda r: (
+        0 if r.get("Verified") else 1,
+        0 if r.get("BestOffer") else 1,
+        0 if r.get("HotOffer") else 1,
+        -(r.get("Discount") or 0),
+    ))
+    return _enrich_and_filter_live(rows[:limit])
 
 
 async def get_coupons_for_verticals_with_location(
@@ -186,33 +179,23 @@ async def get_coupons_for_verticals_with_location(
 
 async def get_coupons_by_brand_name(brand: str, limit: int = 20) -> list[dict]:
     """
-    Fallback brand search: CouponName LIKE '%brand%' across all active coded coupons.
-    Strict expiry filter — same invariants as every other retrieval function.
-    Only runs when the store-based lookup returns 0.
+    Fallback brand search: scan all cached coupons for CouponName containing
+    the brand string (case-insensitive). Only runs when the store-based
+    lookup returns 0 results.
     """
     if not brand or not brand.strip():
         return []
 
-    sql = f"""
-        SELECT TOP {limit} {_COUPON_FIELDS}
-        FROM   {config.COUPONS_TABLE}
-        WHERE  Status = 1
-          AND  (EndDate >= GETDATE() OR EndDate IS NULL)
-          AND  CouponCode IS NOT NULL AND CouponCode != ''
-          AND  CouponName LIKE ?
-        ORDER BY
-          CASE WHEN Verified  = 1 THEN 0 ELSE 1 END,
-          CASE WHEN BestOffer = 1 THEN 0 ELSE 1 END,
-          CASE WHEN HotOffer  = 1 THEN 0 ELSE 1 END,
-          ISNULL(Discount, 0) DESC
-    """
+    brand_lower = brand.strip().lower()
+    rows = [
+        r for r in cache.get_all_coupons_flat()
+        if brand_lower in (r.get("CouponName") or "").lower()
+    ]
 
-    rows = await db.async_query(sql, (f"%{brand.strip()}%",))
-
-    live: list[dict] = []
-    for r in rows:
-        r["StoreName"] = cache.get_store_name(r["MerchantID"])
-        validity.enrich_coupon(r)
-        if r.get("validity_urgency") != "expired":
-            live.append(r)
-    return live
+    rows.sort(key=lambda r: (
+        0 if r.get("Verified") else 1,
+        0 if r.get("BestOffer") else 1,
+        0 if r.get("HotOffer") else 1,
+        -(r.get("Discount") or 0),
+    ))
+    return _enrich_and_filter_live(rows[:limit])

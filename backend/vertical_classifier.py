@@ -80,6 +80,28 @@ def get_verticals_list() -> list[dict]:
     return [{"id": vid, "name": name} for vid, name in _verticals.items()]
 
 
+_PARENT_CHILD_MAP = {
+    2075: {2086, 2087, 2088, 2103, 2183, 2185, 2181, 2948, 2949, 2950, 2182, 2184, 4452}, # Travel -> Bus, Flight, Hotel, Cab, Car Rentals, Holiday Packages, Train Tickets, etc.
+    2056: {2082, 2089, 2090, 2094, 2114, 2220, 2093}, # Electronics -> Mobile, Mobile Accessories, Laptops, Computer Accessories, Headphones, Speakers, Tablets
+    2079: {2061, 2073, 2299, 2068, 2319, 2303, 2304, 2307, 2313, 2321, 2104, 2105, 2232, 2278, 5314}, # Fashion -> Clothing, Footwear, Eyewear, Jewelry, Handbags, Watches, Bags, etc.
+    2062: {2169, 2171, 3913, 2084, 2165, 2166, 2167, 2170, 2172, 2173, 2176, 4531}, # Food -> Food Delivery, Restaurants, Fast Food, Pizza, Beverages, Cake, etc.
+    2078: {2157, 2354}, # Recharge -> DTH, Utility
+}
+
+def clean_redundant_verticals(vertical_ids: list[int]) -> list[int]:
+    """Remove parent verticals if any of their child verticals are also matched."""
+    if not vertical_ids or len(vertical_ids) <= 1:
+        return vertical_ids
+    v_set = set(vertical_ids)
+    to_remove = set()
+    for parent_id, children in _PARENT_CHILD_MAP.items():
+        if parent_id in v_set:
+            if any(child in v_set for child in children):
+                to_remove.add(parent_id)
+    return [vid for vid in vertical_ids if vid not in to_remove]
+
+
+
 @dataclass
 class ClassifyResult:
     corrected_query: str              = ""
@@ -94,6 +116,9 @@ class ClassifyResult:
     needs_clarification: bool         = False
     clarification_question: str       = ""
     is_followup: bool                 = False
+
+
+
 
 
 async def classify(
@@ -167,10 +192,13 @@ async def classify(
                 except (ValueError, TypeError):
                     pass
 
+        matched_ids = [int(i) for i in data.get("matched_ids", []) if i in _verticals]
+        matched_ids = clean_redundant_verticals(matched_ids)
+
         result = ClassifyResult(
             corrected_query        = data.get("corrected_query", user_message).strip(),
             intent                 = data.get("intent", "coupon_search"),
-            matched_ids            = [int(i) for i in data.get("matched_ids", []) if i in _verticals],
+            matched_ids            = matched_ids,
             store_names            = store_names,
             location_keywords      = location_keywords,
 

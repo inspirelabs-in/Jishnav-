@@ -8,7 +8,10 @@ import sys
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+import asyncio
+import uuid
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -23,7 +26,9 @@ import query_router
 import retriever
 import responder
 import llm_logger
+import postgres_db
 from llm.factory import get_llm
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,9 +50,19 @@ app.add_middleware(
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
+async def cleanup_old_guest_sessions_loop() -> None:
+    while True:
+        try:
+            await postgres_db.cleanup_old_guest_sessions()
+        except Exception as e:
+            log.error("Error in guest sessions cleanup loop: %s", e)
+        await asyncio.sleep(24 * 3600)  # Sleep for 1 day
+
 @app.on_event("startup")
 async def startup() -> None:
     log.info("Starting GrabonGPT backend...")
+    await postgres_db.init_db()
+    asyncio.create_task(cleanup_old_guest_sessions_loop())
     cache.build()
     store_index.build()
     vertical_classifier.build()
@@ -56,11 +71,18 @@ async def startup() -> None:
     log.info("GrabonGPT backend ready.")
 
 
+
 # ── Request / Response models ──────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+
+
+class MigrateRequest(BaseModel):
+    guest_token: str
+    user_id: str
+
 
 
 # ── SSE helpers ────────────────────────────────────────────────────────────────
@@ -144,12 +166,59 @@ def _quota_for_items(n_items: int) -> int:
 # ── Chat endpoint ──────────────────────────────────────────────────────────────
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
     session_id = req.session_id
     message    = req.message.strip()
 
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    grabon_session = request.cookies.get(config.SESSION_COOKIE_NAME)
+    x_guest_token = request.headers.get("x-guest-token")
+
+    user_id = None
+    guest_token = None
+
+    if grabon_session:
+        try:
+            async with httpx.AsyncClient() as client:
+                cookies = {config.SESSION_COOKIE_NAME: grabon_session}
+                res = await client.get(config.AUTH_SESSION_ENDPOINT, cookies=cookies, timeout=5.0)
+                if res.status_code == 200:
+                    user_data = res.json()
+                    user_id = user_data.get(config.USER_ID_FIELD)
+                    if not user_id:
+                        raise HTTPException(status_code=401, detail="User ID missing from session response")
+                else:
+                    raise HTTPException(status_code=401, detail="Session validation failed")
+        except Exception as e:
+            log.error("Auth validation exception: %s", e)
+            raise HTTPException(status_code=401, detail="Authentication failed")
+    elif x_guest_token:
+        guest_token = x_guest_token
+        guest = await postgres_db.get_guest_session(guest_token)
+        if not guest:
+            raise HTTPException(status_code=401, detail="Invalid guest token")
+        if guest["chat_count"] >= 4:
+            raise HTTPException(status_code=403, detail="GUEST_LIMIT_REACHED")
+        
+        await postgres_db.increment_guest_chat_count(guest_token)
+    else:
+        raise HTTPException(status_code=401, detail="No session or guest token provided")
+
+    title = message[:255]
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id must be a valid UUID")
+
+    await postgres_db.ensure_session_exists(
+        session_uuid,
+        user_id=user_id,
+        guest_token=guest_token,
+        title=title
+    )
+
 
     async def generate():
         try:
@@ -168,9 +237,15 @@ async def chat(req: ChatRequest):
             yield _sse_meta({"isCouponSearch": route.query_type in ("A", "B")})
 
             # Shared across all paths that fetch coupons.
-            # "Items" = distinct verticals in a store-less multi-vertical ask (e.g.
-            # bus+hotel+food = 3 items); a store-scoped ask is always 1 item.
-            _n_items = len(route.vertical_ids) if (route.vertical_ids and not route.store_ids) else 1
+            # "Items" = distinct stores if store_ids not empty; otherwise distinct verticals
+            # in a store-less multi-vertical ask; otherwise 1.
+            if route.store_ids:
+                _n_items = len(route.store_ids)
+            elif route.vertical_ids:
+                _n_items = len(route.vertical_ids)
+            else:
+                _n_items = 1
+
             if route.requested_count:
                 # Fetch limit must stay generous even for a small requested count --
                 # the same coupon often appears as several near-duplicate raw rows
@@ -186,7 +261,9 @@ async def chat(req: ChatRequest):
                 _quota = _quota_for_items(_n_items)
             _coupons_pre_filtered = False  # True when coupons already verified by filter_brand_coupons
             _vertical_coupon_groups: dict[str, list[dict]] = {}  # populated for multi-vertical asks
+            _store_coupon_groups: dict[str, list[dict]] = {}     # populated for multi-store asks
             _widened_from_store = False  # True when a store's own coupons were 0 and we substituted its vertical
+            _empty_sids: list[int] = []   # stores that returned 0 coupons
 
             # ── System info question (what categories, what can you do, etc.) ──
             if route.query_type == "INFO":
@@ -231,8 +308,8 @@ async def chat(req: ChatRequest):
                     output_tokens = llm.last_usage.get("output_tokens", 0),
                     session_id    = session_id,
                 )
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()
                 return
 
@@ -242,8 +319,8 @@ async def chat(req: ChatRequest):
                 async for chunk in _stream_fallback_response(message, candidate_coupons=None):
                     yield _sse_text(chunk)
                     full_text += chunk
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()
                 return
 
@@ -254,7 +331,11 @@ async def chat(req: ChatRequest):
                 # Before hitting SearXNG: try CouponName LIKE search in DB.
                 # Catches brands not in the store index (e.g. "Vivo coupon codes"
                 # auto-routed to web search because LLM didn't extract store_names).
-                if not route.store_ids:
+                # Skipped when the brand is a KNOWN store with zero live coupons
+                # (e.g. Amazon) -- any LIKE hit there is guaranteed to belong to a
+                # different store that just mentions the name in passing (e.g.
+                # "Amazon Pay Offer" issued by an unrelated hotel-booking site).
+                if not route.store_ids and not store_index.is_known_but_empty(category):
                     _like_hits = await retriever.get_coupons_by_brand_name(category)
                     log.info("is_explicit_web LIKE fallback for %r: %d hits", category, len(_like_hits))
                     if _like_hits:
@@ -274,10 +355,11 @@ async def chat(req: ChatRequest):
                                     full_text += chunk
                                 else:
                                     yield _sse_coupons(chunk["data"])
-                            conv.add_message(session_id, conv.Message(role="user", content=message))
-                            conv.add_message(session_id, conv.Message(
+                            await conv.add_message(session_id, conv.Message(role="user", content=message))
+                            await conv.add_message(session_id, conv.Message(
                                 role="assistant", content=full_text,
                                 coupon_count=len(_verified),
+                                coupons=_verified,
                             ))
                             yield _sse_done()
                             return
@@ -287,8 +369,8 @@ async def chat(req: ChatRequest):
                 async for chunk in responder.stream_unavailable_response(message, session_id, brand):
                     yield _sse_text(chunk)
                     full_text += chunk
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()
                 return
 
@@ -314,8 +396,8 @@ async def chat(req: ChatRequest):
                     if not gen_groups:
                         reply = "No active coupons found for those categories right now."
                         yield _sse_text(reply)
-                        conv.add_message(session_id, conv.Message(role="user", content=message))
-                        conv.add_message(session_id, conv.Message(role="assistant", content=reply))
+                        await conv.add_message(session_id, conv.Message(role="user", content=message))
+                        await conv.add_message(session_id, conv.Message(role="assistant", content=reply))
                         yield _sse_done()
                         return
 
@@ -332,11 +414,12 @@ async def chat(req: ChatRequest):
                     intro     = f"Here are the general {' and '.join(gen_names)} deals:"
                     yield _sse_text(intro)
                     yield _sse_coupons(responder.serialise_coupons(gen_coupons))
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(
+                    await conv.add_message(session_id, conv.Message(role="user", content=message))
+                    await conv.add_message(session_id, conv.Message(
                         role="assistant", content=intro,
                         matched_vertical_ids=gen_vids,
                         coupon_count=len(gen_coupons),
+                        coupons=responder.serialise_coupons(gen_coupons),
                     ))
                     yield _sse_done()
                     return
@@ -375,8 +458,8 @@ async def chat(req: ChatRequest):
                         async for chunk in responder.stream_unavailable_response(message, session_id, _subject):
                             yield _sse_text(chunk)
                             full_text += chunk
-                        conv.add_message(session_id, conv.Message(role="user", content=message))
-                        conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                        await conv.add_message(session_id, conv.Message(role="user", content=message))
+                        await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                         yield _sse_done()
                         return
 
@@ -398,12 +481,13 @@ async def chat(req: ChatRequest):
                         else:
                             yield _sse_coupons(chunk["data"])
 
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(
+                    await conv.add_message(session_id, conv.Message(role="user", content=message))
+                    await conv.add_message(session_id, conv.Message(
                         role="assistant", content=full_text,
                         matched_vertical_ids=fb_vids,
                         store_ids=fb_sids,
                         coupon_count=len(coupons),
+                        coupons=coupons,
                     ))
                     yield _sse_done()
                     return
@@ -422,8 +506,8 @@ async def chat(req: ChatRequest):
                     ):
                         yield _sse_text(chunk)
                         full_text += chunk
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                    await conv.add_message(session_id, conv.Message(role="user", content=message))
+                    await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                     yield _sse_done()
                     return
 
@@ -440,12 +524,13 @@ async def chat(req: ChatRequest):
                     else:
                         yield _sse_coupons(chunk["data"])
 
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(
                     role="assistant", content=full_text,
                     matched_vertical_ids=route.vertical_ids,
                     store_ids=route.store_ids,
                     coupon_count=len(coupons),
+                    coupons=coupons,
                 ))
                 yield _sse_done()
                 return
@@ -456,8 +541,8 @@ async def chat(req: ChatRequest):
                 async for chunk in _stream_fallback_response(message):
                     yield _sse_text(chunk)
                     full_text += chunk
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()
                 return
 
@@ -465,7 +550,7 @@ async def chat(req: ChatRequest):
             if route.is_negation:
                 # If "no" follows a clarification question that had saved context,
                 # treat it as "no, don't clarify — just show me what you have"
-                _last = conv.last_assistant_message(session_id)
+                _last = await conv.last_assistant_message(session_id)
                 _ctx_sids = (_last.store_ids if _last else []) or []
                 _ctx_vids = (_last.matched_vertical_ids if _last else []) or []
                 if _last and _last.was_narrowing and (_ctx_sids or _ctx_vids):
@@ -476,8 +561,8 @@ async def chat(req: ChatRequest):
                 else:
                     reply = "No problem! What else can I help you find?"
                     yield _sse_text(reply)
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(role="assistant", content=reply))
+                    await conv.add_message(session_id, conv.Message(role="user", content=message))
+                    await conv.add_message(session_id, conv.Message(role="assistant", content=reply))
                     yield _sse_done()
                     return
 
@@ -492,9 +577,9 @@ async def chat(req: ChatRequest):
                     yield _sse_text(chunk)
                     full_text += chunk
 
-                conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
                 # Save any partial context so affirmation/negation follow-ups can recover it
-                conv.add_message(session_id, conv.Message(
+                await conv.add_message(session_id, conv.Message(
                     role="assistant", content=full_text,
                     was_narrowing=True,
                     store_ids=route.store_ids,
@@ -580,12 +665,13 @@ async def chat(req: ChatRequest):
                     full_text = note
                     pending = f"general_fallback:{','.join(str(v) for v in (no_specific_vids or route.vertical_ids))}"
 
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(
                     role="assistant", content=full_text,
                     matched_vertical_ids=route.vertical_ids,
                     coupon_count=len(loc_coupons),
                     pending_offer=pending,
+                    coupons=responder.serialise_coupons(loc_coupons) if no_specific_vids else loc_coupons,
                 ))
                 yield _sse_done()
                 return
@@ -660,17 +746,32 @@ async def chat(req: ChatRequest):
                         # so showing other brands' coupons is wrong.
                         coupons, stores_searched = await _fetch(store_ids=route.store_ids)
             elif route.store_ids:
-                coupons, stores_searched = await _fetch(store_ids=route.store_ids)
-                # Requested store has zero live coupons at all. Only substitute
-                # sibling stores from the same vertical when that vertical is on
-                # the safe-to-widen list (Bus, Flight, Hotel, Cab, Recharge, Food
-                # Delivery, etc.) — never for product/manufacturer verticals
-                # (Electronics, Fashion, ...), where a different store means a
-                # genuinely different product (Apple must never become OPPO).
-                if (not coupons and route.vertical_ids
-                        and coupon_tiers.vertical_allows_widening(route.vertical_ids)):
-                    coupons, stores_searched = await _fetch(vertical_ids=route.vertical_ids)
-                    _widened_from_store = bool(coupons)
+                if len(route.store_ids) > 1:
+                    # Multi-store query
+                    coupons = []
+                    stores_searched = []
+                    for sid in route.store_ids:
+                        sname = cache.get_store_name(sid)
+                        sc, _ = await _fetch(store_ids=[sid])
+                        if sc:
+                            coupons.extend(sc)
+                            _store_coupon_groups[sname] = sc
+                            stores_searched.append((sid, sname))
+                        else:
+                            _empty_sids.append(sid)
+                else:
+                    # Single-store query
+                    coupons, stores_searched = await _fetch(store_ids=route.store_ids)
+                    # Requested store has zero live coupons at all. Only substitute
+                    # sibling stores from the same vertical when that vertical is on
+                    # the safe-to-widen list (Bus, Flight, Hotel, Cab, Recharge, Food
+                    # Delivery, etc.) — never for product/manufacturer verticals
+                    # (Electronics, Fashion, ...), where a different store means a
+                    # genuinely different product (Apple must never become OPPO).
+                    if (not coupons and route.vertical_ids
+                            and coupon_tiers.vertical_allows_widening(route.vertical_ids)):
+                        coupons, stores_searched = await _fetch(vertical_ids=route.vertical_ids)
+                        _widened_from_store = bool(coupons)
             else:
                 if len(route.vertical_ids) <= 1:
                     coupons, stores_searched = await _fetch(vertical_ids=route.vertical_ids)
@@ -703,6 +804,7 @@ async def chat(req: ChatRequest):
             # index. We fetched the full vertical (Mobiles) but must not show other
             # brands (OPPO, Samsung). Filter coupons whose StoreName or CouponName
             # contains the brand. If nothing matches, offer web search instead.
+            _initial_vertical_coupons = list(coupons) if coupons else []
             if route.brand_name_hint and coupons:
                 # Split into tokens so "HP Omen" matches "HP Shopping" (via "hp") and
                 # "Omen 16-ap0181ax" (via "omen") instead of looking for "hp omen" as
@@ -718,9 +820,13 @@ async def chat(req: ChatRequest):
                 ]
                 if not _brand_matches:
                     # Vertical fetch didn't surface this brand — try LIKE fallback per token.
-                    # "HP Omen" → try LIKE '%HP%' and LIKE '%Omen%' separately.
+                    # "HP Omen" → try LIKE '%HP%' and LIKE '%Omen%' separately. Skip any
+                    # token that's itself a known store with zero live coupons (e.g.
+                    # "Amazon") -- see store_index.is_known_but_empty for why.
                     _like_hits = []
                     for _tok in [t for t in route.brand_name_hint.split() if len(t) >= 2]:
+                        if store_index.is_known_but_empty(_tok):
+                            continue
                         _tok_hits = await retriever.get_coupons_by_brand_name(_tok)
                         _like_hits.extend(_tok_hits)
                     if _like_hits:
@@ -732,22 +838,45 @@ async def chat(req: ChatRequest):
                     coupons = _brand_matches
                     _coupons_pre_filtered = True
                 else:
-                    full_text = ""
-                    async for chunk in responder.stream_unavailable_response(
-                        message, session_id, route.brand_name_hint
-                    ):
-                        yield _sse_text(chunk)
-                        full_text += chunk
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
-                    yield _sse_done()
-                    return
+                    # No brand matches found!
+                    # Prompt the user for general coupons fallback if they are available
+                    if route.vertical_ids and _initial_vertical_coupons:
+                        category = _infer_category(message, route)
+                        category_lower = category.lower() if category else "general"
+                        category_part = f" {category_lower}" if category_lower != "general" else ""
+                        msg = f"The brand you asked for ({route.brand_name_hint}) is currently not available. Would you like to see general{category_part} coupon codes?"
+                        yield _sse_text(msg)
+                        
+                        pending = f"general_fallback:{','.join(str(v) for v in route.vertical_ids)}"
+                        
+                        await conv.add_message(session_id, conv.Message(role="user", content=message))
+                        await conv.add_message(session_id, conv.Message(
+                            role="assistant", content=msg,
+                            pending_offer=pending,
+                            store_ids=route.store_ids,
+                            matched_vertical_ids=route.vertical_ids,
+                        ))
+                        yield _sse_done()
+                        return
+                    else:
+                        full_text = ""
+                        async for chunk in responder.stream_unavailable_response(
+                            message, session_id, route.brand_name_hint
+                        ):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+                        await conv.add_message(session_id, conv.Message(role="user", content=message))
+                        await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                        yield _sse_done()
+                        return
 
             # Brand named but vertical fetch found nothing — try LIKE per token.
             # e.g. "HP Omen" → vertical=Electronics returned empty, try LIKE '%HP%' and LIKE '%Omen%'
             if route.brand_name_hint and not coupons:
                 _like_hits = []
                 for _tok in [t for t in route.brand_name_hint.split() if len(t) >= 2]:
+                    if store_index.is_known_but_empty(_tok):
+                        continue
                     _tok_hits = await retriever.get_coupons_by_brand_name(_tok)
                     _like_hits.extend(_tok_hits)
                 if _like_hits:
@@ -755,10 +884,33 @@ async def chat(req: ChatRequest):
                     if _filtered:
                         coupons = _filtered
                         _coupons_pre_filtered = True
+                
+                if not coupons:
+                    # Let's check if we can fetch general coupons for the vertical(s)
+                    if route.vertical_ids:
+                        _gen_coupons, _ = await _fetch(vertical_ids=route.vertical_ids)
+                        if _gen_coupons:
+                            category = _infer_category(message, route)
+                            category_lower = category.lower() if category else "general"
+                            category_part = f" {category_lower}" if category_lower != "general" else ""
+                            msg = f"The brand you asked for ({route.brand_name_hint}) is currently not available. Would you like to see general{category_part} coupon codes?"
+                            yield _sse_text(msg)
+                            
+                            pending = f"general_fallback:{','.join(str(v) for v in route.vertical_ids)}"
+                            
+                            await conv.add_message(session_id, conv.Message(role="user", content=message))
+                            await conv.add_message(session_id, conv.Message(
+                                role="assistant", content=msg,
+                                pending_offer=pending,
+                                store_ids=route.store_ids,
+                                matched_vertical_ids=route.vertical_ids,
+                            ))
+                            yield _sse_done()
+                            return
 
             # If previous offer was new_user_fallback and user is continuing that flow,
             # skip the new-user check entirely — just show the general coupons
-            last_asst = conv.last_assistant_message(session_id)
+            last_asst = await conv.last_assistant_message(session_id)
             _prev_pending = last_asst.pending_offer if last_asst else ""
             if _prev_pending.startswith("new_user_fallback:"):
                 # User said something after the offer — treat as "show me those"
@@ -793,8 +945,8 @@ async def chat(req: ChatRequest):
                         f"Would you like to see those?"
                     )
                     yield _sse_text(msg)
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(
+                    await conv.add_message(session_id, conv.Message(role="user", content=message))
+                    await conv.add_message(session_id, conv.Message(
                         role="assistant", content=msg,
                         pending_offer=pending,
                         store_ids=route.store_ids,
@@ -864,11 +1016,12 @@ async def chat(req: ChatRequest):
                             full_text += chunk
                         else:
                             yield _sse_coupons(chunk["data"])
-                    conv.add_message(session_id, conv.Message(role="user", content=message))
-                    conv.add_message(session_id, conv.Message(
+                    await conv.add_message(session_id, conv.Message(role="user", content=message))
+                    await conv.add_message(session_id, conv.Message(
                         role="assistant", content=full_text,
                         store_ids=route.store_ids,
                         coupon_count=len(fallback_coupons),
+                        coupons=fallback_coupons,
                     ))
                     yield _sse_done()
                     return
@@ -891,8 +1044,8 @@ async def chat(req: ChatRequest):
                     async for chunk in _stream_fallback_response(message, candidate_coupons=None):
                         yield _sse_text(chunk)
                         full_text += chunk
-                conv.add_message(session_id, conv.Message(role="user", content=message))
-                conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
+                await conv.add_message(session_id, conv.Message(role="user", content=message))
+                await conv.add_message(session_id, conv.Message(role="assistant", content=full_text))
                 yield _sse_done()
                 return
 
@@ -929,7 +1082,22 @@ async def chat(req: ChatRequest):
             # "item" here is a category, not a store the user named.
             _store_scoped = bool(route.store_ids) and not _widened_from_store
             _already_selected = False
-            if _vertical_coupon_groups:
+            if _store_coupon_groups:
+                _selected_by_item = await responder.select_top_coupons_for_items(
+                    _store_coupon_groups, message, quota_per_item=_quota, store_scoped=True,
+                )
+                coupons = [
+                    c for _sname in _store_coupon_groups
+                    for c in _selected_by_item.get(_sname, [])
+                ]
+                _already_selected = True
+            elif _widened_from_store:
+                _widen_query = f"{_infer_category(message, route)} coupons"
+                coupons = await responder.select_top_coupons(
+                    coupons, _widen_query, quota=_quota, store_scoped=False
+                )
+                _already_selected = True
+            elif _vertical_coupon_groups:
                 _selected_by_item = await responder.select_top_coupons_for_items(
                     _vertical_coupon_groups, message, quota_per_item=_quota, store_scoped=False,
                 )
@@ -962,13 +1130,21 @@ async def chat(req: ChatRequest):
                 yield _sse_text(_note)
                 full_text += _note
 
-            conv.add_message(session_id, conv.Message(role="user", content=message))
-            conv.add_message(session_id, conv.Message(
+            # Tell user which requested stores had no results
+            if _empty_sids:
+                _missing = ", ".join(cache.get_store_name(sid) or str(sid) for sid in _empty_sids)
+                _note = f"\n\nNo active coupon codes found for {_missing} on GrabOn right now."
+                yield _sse_text(_note)
+                full_text += _note
+
+            await conv.add_message(session_id, conv.Message(role="user", content=message))
+            await conv.add_message(session_id, conv.Message(
                 role="assistant", content=full_text,
                 matched_vertical_ids=route.vertical_ids,
                 store_ids=route.store_ids or [s[0] for s in stores_searched],
                 coupon_count=len(coupons),
                 pending_offer=pending,
+                coupons=coupons,
             ))
             yield _sse_done()
 
@@ -1064,6 +1240,178 @@ async def health():
     }
 
 
+# ── Authentication and History Endpoints ────────────────────────────────────────
+
+@app.get("/api/history")
+async def get_chat_history(request: Request):
+    grabon_session = request.cookies.get(config.SESSION_COOKIE_NAME)
+    x_guest_token = request.headers.get("x-guest-token")
+
+    if grabon_session:
+        try:
+            async with httpx.AsyncClient() as client:
+                cookies = {config.SESSION_COOKIE_NAME: grabon_session}
+                res = await client.get(config.AUTH_SESSION_ENDPOINT, cookies=cookies, timeout=5.0)
+                if res.status_code == 200:
+                    user_data = res.json()
+                    user_id = user_data.get(config.USER_ID_FIELD)
+                    if user_id:
+                        history = await postgres_db.get_history_by_user(user_id)
+                        return history
+                    else:
+                        raise HTTPException(status_code=401, detail="User ID missing from session response")
+                else:
+                    raise HTTPException(status_code=401, detail="Session invalid")
+        except Exception as e:
+            log.error("History auth check error: %s", e)
+            raise HTTPException(status_code=401, detail="Authentication failed")
+            
+    elif x_guest_token:
+        # Check if guest token exists
+        guest = await postgres_db.get_guest_session(x_guest_token)
+        if not guest:
+            raise HTTPException(status_code=401, detail="Invalid guest token")
+        history = await postgres_db.get_history_by_guest(x_guest_token)
+        return history
+    else:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+@app.delete("/api/history/{session_id}")
+async def delete_chat_history(session_id: str, request: Request):
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    grabon_session = request.cookies.get(config.SESSION_COOKIE_NAME)
+    x_guest_token = request.headers.get("x-guest-token")
+
+    if grabon_session:
+        try:
+            async with httpx.AsyncClient() as client:
+                cookies = {config.SESSION_COOKIE_NAME: grabon_session}
+                res = await client.get(config.AUTH_SESSION_ENDPOINT, cookies=cookies, timeout=5.0)
+                if res.status_code == 200:
+                    user_data = res.json()
+                    user_id = user_data.get(config.USER_ID_FIELD)
+                    if user_id:
+                        await postgres_db.delete_session(session_uuid, user_id=user_id, guest_token=None)
+                        return {"status": "deleted"}
+                    else:
+                        raise HTTPException(status_code=401, detail="User ID missing from session response")
+                else:
+                    raise HTTPException(status_code=401, detail="Session invalid")
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("Delete session auth check error: %s", e)
+            raise HTTPException(status_code=401, detail="Authentication failed")
+            
+    elif x_guest_token:
+        # Check if guest token exists
+        guest = await postgres_db.get_guest_session(x_guest_token)
+        if not guest:
+            raise HTTPException(status_code=401, detail="Invalid guest token")
+        await postgres_db.delete_session(session_uuid, user_id=None, guest_token=x_guest_token)
+        return {"status": "deleted"}
+    else:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+_guest_rate_limit = {}  # ip -> list of timestamps
+
+def check_guest_rate_limit(ip: str) -> bool:
+    import time
+    now = time.time()
+    # filter timestamps in the last 60 seconds
+    timestamps = [t for t in _guest_rate_limit.get(ip, []) if now - t < 60]
+    if len(timestamps) >= 5:
+        return False
+    timestamps.append(now)
+    _guest_rate_limit[ip] = timestamps
+    return True
+
+
+@app.post("/api/auth/guest")
+async def start_guest_session(request: Request):
+    ip = request.client.host
+    if not check_guest_rate_limit(ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Limit is 5 per minute.")
+        
+    user_agent = request.headers.get("user-agent", "")
+    import hashlib
+    fingerprint_hash = hashlib.sha256(f"{ip}:{user_agent}".encode("utf-8")).hexdigest()
+    
+    existing_token = await postgres_db.get_guest_by_fingerprint(fingerprint_hash)
+    if existing_token:
+        return {"guest_token": existing_token}
+        
+    new_token = "guest_" + str(uuid.uuid4())
+    await postgres_db.create_guest_session(new_token, fingerprint_hash)
+    return {"guest_token": new_token}
+
+
+@app.post("/api/auth/migrate")
+async def migrate_guest_session(req: MigrateRequest, response: Response):
+    await postgres_db.migrate_guest(req.guest_token, req.user_id)
+    response.delete_cookie("guest_token")
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie(
+        config.SESSION_COOKIE_NAME,
+        domain=config.SESSION_COOKIE_DOMAIN,
+    )
+    return {"status": "ok"}
+
+
+# ── Mock Authentication (gated by MOCK_AUTH_ENABLED) ───────────────────────────
+
+@app.get("/api/mock/auth-session")
+async def mock_auth_session(request: Request):
+    if not config.MOCK_AUTH_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    cookie_val = request.cookies.get(config.SESSION_COOKIE_NAME)
+    if cookie_val:
+        return {
+            config.USER_ID_FIELD: "mock-user-123",
+            "email": "mockuser@example.com",
+            "name": "Mock User"
+        }
+    raise HTTPException(status_code=401, detail="not authenticated")
+
+
+@app.post("/api/mock/auth-google")
+async def mock_auth_google(req: dict, response: Response):
+    if not config.MOCK_AUTH_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    code = req.get("code")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing auth code")
+    
+    session_id = "mock-sess-" + str(uuid.uuid4())
+    response.set_cookie(
+        key=config.SESSION_COOKIE_NAME,
+        value=session_id,
+        domain=config.SESSION_COOKIE_DOMAIN,
+        httponly=False,
+        samesite="lax",
+    )
+    return {
+        "session_id": session_id,
+        "user": {
+            config.USER_ID_FIELD: "mock-user-123",
+            "email": "mockuser@example.com",
+            "name": "Mock User"
+        }
+    }
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1074,3 +1422,4 @@ if __name__ == "__main__":
         reload  = False,
         workers = 1,
     )
+

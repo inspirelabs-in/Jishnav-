@@ -2,44 +2,36 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Message, Coupon, ChatRecord } from "../types";
 
 const API_BASE = "/api";
-const STORAGE_KEY = "grabgpt_history";
 
 function genId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
 function genSessionId(): string {
-  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function loadHistoryFromStorage(): ChatRecord[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
   }
+  // Fallback UUID v4 generator
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
-function saveHistoryToStorage(history: ChatRecord[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-  } catch { /* quota exceeded — silently ignore */ }
+interface UseChatProps {
+  guestToken: string | null;
+  onLimitReached?: () => void;
 }
 
-export function useChat() {
-  const [messages, setMessages]     = useState<Message[]>([]);
-  const [isLoading, setIsLoading]   = useState(false);
-  const [history, setHistory]       = useState<ChatRecord[]>(loadHistoryFromStorage);
+export function useChat({ guestToken, onLimitReached }: UseChatProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [history, setHistory] = useState<ChatRecord[]>([]);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
-  const abortRef    = useRef<AbortController | null>(null);
-  const sessionId   = useRef(genSessionId());
+  const abortRef = useRef<AbortController | null>(null);
+  const sessionId = useRef(genSessionId());
   const messagesRef = useRef<Message[]>([]);
-
-  // Persist history to localStorage on every change
-  useEffect(() => {
-    saveHistoryToStorage(history);
-  }, [history]);
 
   const syncMessages = (msgs: Message[]) => {
     messagesRef.current = msgs;
@@ -78,6 +70,28 @@ export function useChat() {
     });
   }, []);
 
+  // Fetch chat history from the backend
+  const fetchHistory = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (guestToken) {
+        headers["x-guest-token"] = guestToken;
+      }
+      const resp = await fetch("/api/history", { headers });
+      if (resp.ok) {
+        const data = await resp.json();
+        setHistory(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch history:", err);
+    }
+  }, [guestToken]);
+
+  // Load history on mount or when guestToken changes
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;
 
@@ -94,21 +108,39 @@ export function useChat() {
     setIsLoading(true);
 
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (guestToken) {
+        headers["x-guest-token"] = guestToken;
+      }
+
       const resp = await fetch(`${API_BASE}/chat`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ session_id: sessionId.current, message: text }),
-        signal:  ctrl.signal,
+        method: "POST",
+        headers,
+        body: JSON.stringify({ session_id: sessionId.current, message: text }),
+        signal: ctrl.signal,
       });
+
+      if (resp.status === 403) {
+        const errData = await resp.json();
+        if (errData.detail === "GUEST_LIMIT_REACHED") {
+          // Remove the empty assistant bubble that was appended
+          syncMessages(messagesRef.current.filter(m => m.id !== asstId));
+          setIsLoading(false);
+          onLimitReached?.();
+          return;
+        }
+      }
 
       if (!resp.ok || !resp.body) {
         appendChunk(asstId, "Sorry, something went wrong. Please try again.");
         return;
       }
 
-      const reader  = resp.body.getReader();
+      const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let buffer    = "";
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -121,10 +153,10 @@ export function useChat() {
         for (const part of parts) {
           const lines = part.trim().split("\n");
           let event = "";
-          let data  = "";
+          let data = "";
           for (const line of lines) {
             if (line.startsWith("event: ")) event = line.slice(7);
-            if (line.startsWith("data: "))  data  = line.slice(6);
+            if (line.startsWith("data: ")) data = line.slice(6);
           }
           if (!data) continue;
 
@@ -136,6 +168,7 @@ export function useChat() {
             try { setIsCouponSearch(asstId, !!JSON.parse(data).isCouponSearch); } catch { /* skip */ }
           } else if (event === "done") {
             finalise(asstId);
+            fetchHistory(); // Refresh session history to show new session/title
           } else if (event === "error") {
             try { appendChunk(asstId, JSON.parse(data).message ?? "An error occurred."); } catch { /* skip */ }
             finalise(asstId);
@@ -151,7 +184,7 @@ export function useChat() {
       setIsLoading(false);
       finalise(asstId);
     }
-  }, [isLoading, appendChunk, setCoupons, setIsCouponSearch, finalise]);
+  }, [isLoading, guestToken, onLimitReached, appendChunk, setCoupons, setIsCouponSearch, finalise, fetchHistory]);
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
@@ -163,49 +196,49 @@ export function useChat() {
     });
   }, []);
 
-  const saveCurrentToHistory = useCallback(() => {
-    const current = messagesRef.current;
-    const firstUser = current.find(m => m.role === "user");
-    if (!firstUser) return;
-
-    const sid = sessionId.current;
-    setHistory(prev => {
-      if (prev.some(r => r.sessionId === sid)) return prev;
-      const record: ChatRecord = {
-        id: genId(),
-        title: firstUser.content.length > 55
-          ? firstUser.content.slice(0, 55).trim() + "…"
-          : firstUser.content,
-        sessionId: sid,
-        timestamp: Date.now(),
-        messages: current.map(m => ({ ...m, isStreaming: false })),
-      };
-      return [record, ...prev];
-    });
-  }, []);
-
   const newChat = useCallback(() => {
     abortRef.current?.abort();
     setIsLoading(false);
-    saveCurrentToHistory();
     syncMessages([]);
     setActiveHistoryId(null);
     sessionId.current = genSessionId();
-  }, [saveCurrentToHistory]);
+  }, []);
 
   const loadChat = useCallback((record: ChatRecord) => {
     abortRef.current?.abort();
     setIsLoading(false);
-    saveCurrentToHistory();
     syncMessages(record.messages);
     sessionId.current = record.sessionId;
     setActiveHistoryId(record.id);
-  }, [saveCurrentToHistory]);
-
-  const deleteHistory = useCallback((id: string) => {
-    setHistory(prev => prev.filter(r => r.id !== id));
-    setActiveHistoryId(prev => prev === id ? null : prev);
   }, []);
+
+  const deleteHistory = useCallback(async (id: string) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (guestToken) {
+        headers["x-guest-token"] = guestToken;
+      }
+      const resp = await fetch(`/api/history/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (resp.ok) {
+        setHistory(prev => prev.filter(r => r.id !== id));
+        setActiveHistoryId(prev => {
+          if (prev === id) {
+            syncMessages([]);
+            sessionId.current = genSessionId();
+            return null;
+          }
+          return prev;
+        });
+      } else {
+        console.error("Failed to delete chat history from server:", resp.statusText);
+      }
+    } catch (err) {
+      console.error("Failed to delete chat history:", err);
+    }
+  }, [guestToken]);
 
   const renameHistory = useCallback((id: string, newTitle: string) => {
     const trimmed = newTitle.trim();
@@ -214,8 +247,15 @@ export function useChat() {
   }, []);
 
   return {
-    messages, isLoading, history, activeHistoryId,
-    sendMessage, stopStreaming, newChat, loadChat,
-    deleteHistory, renameHistory,
+    messages,
+    isLoading,
+    history,
+    activeHistoryId,
+    sendMessage,
+    stopStreaming,
+    newChat,
+    loadChat,
+    deleteHistory,
+    renameHistory,
   };
 }

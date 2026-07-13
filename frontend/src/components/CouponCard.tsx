@@ -41,14 +41,14 @@ function StoreLogo({ storeName, faviconUrl }: { storeName: string; faviconUrl: s
   }
 
   return (
-    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden"
-      style={boxStyle}>
+    <div className="w-8 h-8 rounded-lg shrink-0 overflow-hidden"
+      style={{ border: "1px solid var(--brand-20)" }}>
       <img
         src={faviconUrl}
         alt={storeName}
-        width={20}
-        height={20}
-        style={{ objectFit: "contain" }}
+        width={32}
+        height={32}
+        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
         onError={() => setFailed(true)}
       />
     </div>

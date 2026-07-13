@@ -133,7 +133,7 @@ def build() -> None:
         if website:
             domain = website.split("//")[-1].split("/")[0].split("?")[0]
             if domain:
-                id2favicon[sid] = f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
+                id2favicon[sid] = f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
 
         for bc_field in ("Breadcrumb1", "Breadcrumb2"):
             vid = r.get(bc_field) or 0

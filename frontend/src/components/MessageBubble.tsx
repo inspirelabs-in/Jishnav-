@@ -1,4 +1,4 @@
-import { Message, CrossSellSuggestion } from "../types";
+import { Message, CrossSellData } from "../types";
 import { CouponPanel } from "./CouponCard";
 
 function GAvatar() {
@@ -10,47 +10,66 @@ function GAvatar() {
   );
 }
 
-function CrossSellChips({ suggestions, onSend }: {
-  suggestions: CrossSellSuggestion[];
+function CrossSellChips({ data, onSend }: {
+  data: CrossSellData;
   onSend: (text: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2 pt-1">
-      {suggestions.map((s, i) => (
-        <button
-          key={i}
-          onClick={() => onSend(`${s.keyword} coupons on ${s.store_name}`)}
-          className="cross-sell-chip"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "7px 14px",
-            borderRadius: "20px",
-            border: "1px solid var(--border)",
-            background: "var(--surface-1)",
-            color: "var(--text-2)",
-            fontSize: "13px",
-            fontFamily: "GothamRnd, sans-serif",
-            fontWeight: 400,
-            cursor: "pointer",
-            transition: "all 0.15s ease",
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.background = "var(--brand-10, rgba(0,150,100,0.08))";
-            e.currentTarget.style.borderColor = "var(--brand, #009664)";
-            e.currentTarget.style.color = "var(--brand, #009664)";
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.background = "var(--surface-1)";
-            e.currentTarget.style.borderColor = "var(--border)";
-            e.currentTarget.style.color = "var(--text-2)";
-          }}
-        >
-          <span style={{ fontSize: "14px", lineHeight: 1 }}>&#8594;</span>
-          {s.label}
-        </button>
-      ))}
+    <div className="space-y-2 pt-1">
+      {data.intro && (
+        <p style={{
+          fontSize: "13px",
+          color: "var(--text-3, var(--text-2))",
+          fontFamily: "GothamRnd, sans-serif",
+          fontWeight: 400,
+          margin: 0,
+          opacity: 0.8,
+        }}>
+          {data.intro}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {data.suggestions.map((s, i) => {
+          const query = s.store_name
+            ? `${s.keyword} coupons on ${s.store_name}`
+            : `${s.keyword} coupon codes`;
+          return (
+            <button
+              key={i}
+              onClick={() => onSend(query)}
+              className="cross-sell-chip"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "7px 14px",
+                borderRadius: "20px",
+                border: "1px solid var(--border)",
+                background: "var(--surface-1)",
+                color: "var(--text-2)",
+                fontSize: "13px",
+                fontFamily: "GothamRnd, sans-serif",
+                fontWeight: 400,
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = "var(--brand-10, rgba(0,150,100,0.08))";
+                e.currentTarget.style.borderColor = "var(--brand, #009664)";
+                e.currentTarget.style.color = "var(--brand, #009664)";
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = "var(--surface-1)";
+                e.currentTarget.style.borderColor = "var(--border)";
+                e.currentTarget.style.color = "var(--text-2)";
+              }}
+            >
+              <span style={{ fontSize: "14px", lineHeight: 1 }}>&#8594;</span>
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -104,8 +123,8 @@ export function MessageBubble({ message, isDark, onSend }: Props) {
         {message.coupons && message.coupons.length > 0 && (
           <CouponPanel coupons={message.coupons} isDark={isDark} />
         )}
-        {!message.isStreaming && message.crossSellSuggestions && message.crossSellSuggestions.length > 0 && (
-          <CrossSellChips suggestions={message.crossSellSuggestions} onSend={onSend} />
+        {!message.isStreaming && message.crossSell && message.crossSell.suggestions.length > 0 && (
+          <CrossSellChips data={message.crossSell} onSend={onSend} />
         )}
       </div>
     </div>

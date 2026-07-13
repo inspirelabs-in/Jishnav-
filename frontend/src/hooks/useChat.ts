@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Coupon, CrossSellSuggestion, ChatRecord } from "../types";
+import { Message, Coupon, CrossSellData, ChatRecord } from "../types";
 
 const API_BASE = "/api";
 
@@ -54,9 +54,9 @@ export function useChat({ guestToken, onLimitReached }: UseChatProps) {
     });
   }, []);
 
-  const setCrossSell = useCallback((id: string, suggestions: CrossSellSuggestion[]) => {
+  const setCrossSell = useCallback((id: string, data: CrossSellData) => {
     setMessages(prev => {
-      const next = prev.map(m => m.id === id ? { ...m, crossSellSuggestions: suggestions } : m);
+      const next = prev.map(m => m.id === id ? { ...m, crossSell: data } : m);
       messagesRef.current = next;
       return next;
     });

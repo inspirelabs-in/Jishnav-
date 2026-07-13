@@ -98,6 +98,22 @@ def get_vertical_family(vertical_id: int) -> set[int]:
     return {vertical_id}
 
 
+def get_sibling_verticals(vertical_ids: list[int], limit: int = 5) -> list[dict]:
+    """Return sibling verticals from the same family that are NOT in the input list.
+    E.g. if user searched Hotels (2088), returns [{id: 2086, name: "Bus"}, {id: 2087, name: "Flights"}, ...].
+    Only returns verticals that exist in the active _verticals dict."""
+    siblings: list[dict] = []
+    input_set = set(vertical_ids)
+    seen: set[int] = set()
+    for vid in vertical_ids:
+        family = get_vertical_family(vid)
+        for fid in family:
+            if fid not in input_set and fid not in seen and fid in _verticals:
+                seen.add(fid)
+                siblings.append({"id": fid, "name": _verticals[fid]})
+    return siblings[:limit]
+
+
 def clean_redundant_verticals(vertical_ids: list[int]) -> list[int]:
     """Remove parent verticals if any of their child verticals are also matched."""
     if not vertical_ids or len(vertical_ids) <= 1:

@@ -114,8 +114,8 @@ def _sse_error(msg: str) -> str:
     return _sse("error", json.dumps({"message": msg}))
 
 
-def _sse_cross_sell(suggestions: list[dict]) -> str:
-    return _sse("cross_sell", json.dumps(suggestions))
+def _sse_cross_sell(data: dict) -> str:
+    return _sse("cross_sell", json.dumps(data))
 
 
 def _sse_done() -> str:
@@ -425,48 +425,6 @@ async def chat(req: ChatRequest, request: Request):
                         coupon_count=len(gen_coupons),
                         coupons=responder.serialise_coupons(gen_coupons),
                     ))
-                    yield _sse_done()
-                    return
-
-                # User said yes to cross-sell suggestion
-                if route.pending_offer.startswith("cross_sell:"):
-                    _cs_parts = route.pending_offer[11:].split(":", 1)
-                    _cs_sid = int(_cs_parts[0])
-                    _cs_kws = _cs_parts[1].split(",") if len(_cs_parts) > 1 else []
-                    _cs_kw_lower = [kw.lower() for kw in _cs_kws]
-
-                    _cs_all = await retriever.get_coupons_for_stores([_cs_sid], limit=limit)
-                    _cs_coupons = [
-                        c for c in _cs_all
-                        if any(kw in (c.get("CouponName") or "").lower() for kw in _cs_kw_lower)
-                    ] if _cs_kw_lower else _cs_all
-
-                    if _cs_coupons:
-                        full_text = ""
-                        async for chunk in responder.stream_coupon_response(
-                            user_message=message,
-                            session_id=session_id,
-                            coupons=_cs_coupons,
-                            quota=_quota,
-                            store_scoped=True,
-                        ):
-                            if isinstance(chunk, str):
-                                yield _sse_text(chunk)
-                                full_text += chunk
-                            else:
-                                yield _sse_coupons(chunk["data"])
-                        await conv.add_message(session_id, conv.Message(role="user", content=message))
-                        await conv.add_message(session_id, conv.Message(
-                            role="assistant", content=full_text,
-                            store_ids=[_cs_sid],
-                            coupon_count=len(_cs_coupons),
-                            coupons=_cs_coupons,
-                        ))
-                    else:
-                        reply = "No active coupons found for those items right now."
-                        yield _sse_text(reply)
-                        await conv.add_message(session_id, conv.Message(role="user", content=message))
-                        await conv.add_message(session_id, conv.Message(role="assistant", content=reply))
                     yield _sse_done()
                     return
 
@@ -1169,6 +1127,52 @@ async def chat(req: ChatRequest, request: Request):
                 ]
                 _already_selected = True
 
+            # Fire cross-sell LLM call in parallel with the main response stream
+            # so users don't see the ~1.5s delay after coupons load.
+            _cs_task = None
+            if coupons and not _widened_from_store and not pending:
+                if route.store_ids and len(route.store_ids) == 1:
+                    _cs_family = set()
+                    for _vid in (route.vertical_ids or []):
+                        _cs_family |= vertical_classifier.get_vertical_family(_vid)
+                    _cs_raw_keywords = retriever.get_cross_sell_keywords(
+                        store_id=route.store_ids[0],
+                        user_query=route.corrected_query or message,
+                        vertical_family=_cs_family,
+                    )
+                    if _cs_raw_keywords:
+                        _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
+
+                        async def _fetch_store_cs():
+                            r = await responder.get_cross_sell_suggestions(
+                                user_query=route.corrected_query or message,
+                                available_keywords=_cs_raw_keywords,
+                                store_name=_cs_store,
+                            )
+                            if r:
+                                for s in r["suggestions"]:
+                                    s["store_id"] = route.store_ids[0]
+                                    s["store_name"] = _cs_store
+                            return r
+
+                        _cs_task = asyncio.create_task(_fetch_store_cs())
+
+                elif route.vertical_ids and not route.store_ids:
+                    _siblings = vertical_classifier.get_sibling_verticals(route.vertical_ids)
+                    if _siblings:
+                        async def _fetch_vert_cs():
+                            r = await responder.get_cross_sell_suggestions(
+                                user_query=route.corrected_query or message,
+                                sibling_verticals=_siblings,
+                            )
+                            if r:
+                                for s in r["suggestions"]:
+                                    s["store_id"] = 0
+                                    s["store_name"] = ""
+                            return r
+
+                        _cs_task = asyncio.create_task(_fetch_vert_cs())
+
             async for chunk in responder.stream_coupon_response(
                 user_message     = message,
                 session_id       = session_id,
@@ -1199,31 +1203,14 @@ async def chat(req: ChatRequest, request: Request):
                 yield _sse_text(_note)
                 full_text += _note
 
-            # Cross-sell: suggest related products on the same store
-            if (route.store_ids and len(route.store_ids) == 1
-                    and coupons and not _widened_from_store and not pending):
-                _cs_family = set()
-                for _vid in (route.vertical_ids or []):
-                    _cs_family |= vertical_classifier.get_vertical_family(_vid)
-                _cs_raw_keywords = retriever.get_cross_sell_keywords(
-                    store_id=route.store_ids[0],
-                    user_query=route.corrected_query or message,
-                    vertical_family=_cs_family,
-                )
-                if _cs_raw_keywords:
-                    _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
-                    _cs_suggestions = await responder.get_cross_sell_suggestions(
-                        store_name=_cs_store,
-                        user_query=route.corrected_query or message,
-                        available_keywords=_cs_raw_keywords,
-                    )
-                    if _cs_suggestions:
-                        for s in _cs_suggestions:
-                            s["store_id"] = route.store_ids[0]
-                            s["store_name"] = _cs_store
-                        yield _sse_cross_sell(_cs_suggestions)
-                        _cs_kws = [s["keyword"] for s in _cs_suggestions]
-                        pending = f"cross_sell:{route.store_ids[0]}:{','.join(_cs_kws)}"
+            # Await the cross-sell result (already running in parallel)
+            if _cs_task:
+                try:
+                    _cs_result = await _cs_task
+                    if _cs_result:
+                        yield _sse_cross_sell(_cs_result)
+                except Exception as e:
+                    log.warning("Cross-sell task failed: %s", e)
 
             await conv.add_message(session_id, conv.Message(role="user", content=message))
             await conv.add_message(session_id, conv.Message(

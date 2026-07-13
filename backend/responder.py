@@ -539,41 +539,65 @@ async def stream_coupon_response(
 
 
 async def get_cross_sell_suggestions(
-    store_name: str,
     user_query: str,
-    available_keywords: list[str],
-) -> list[dict] | None:
+    available_keywords: list[str] | None = None,
+    store_name: str | None = None,
+    sibling_verticals: list[dict] | None = None,
+) -> dict | None:
     """
-    Ask gpt-4o-mini to pick 2-3 meaningful product categories from the store's
-    available coupon keywords that the user hasn't already asked about, and
-    generate a short, varied suggestion chip label for each.
+    Ask gpt-4o-mini to generate cross-sell suggestions with a short intro line.
 
-    Returns [{"keyword": "pants", "label": "Pants deals"}, ...] or None on failure.
+    Two modes:
+    - Store mode: pick 2-3 product keywords from available_keywords for same store.
+    - Vertical mode: pick 2-3 sibling verticals the user might also want.
+
+    Returns {"intro": "Also on Myntra:", "suggestions": [{"keyword": ..., "label": ...}, ...]}
+    or None on failure.
     """
-    if not available_keywords:
+    if not available_keywords and not sibling_verticals:
         return None
 
-    prompt = (
-        f"The user asked: \"{user_query}\"\n"
-        f"Store: {store_name}\n\n"
-        f"This store also has coupons mentioning these product keywords:\n"
-        f"{json.dumps(available_keywords)}\n\n"
-        f"Pick 2-3 keywords that represent genuinely different PRODUCT CATEGORIES "
-        f"the user might want to explore next on this same store. "
-        f"Rules:\n"
-        f"- Only pick real product/service names (shirts, laptops, flights, pizza, etc.)\n"
-        f"- NEVER pick noise words (rs, off, up, to, get, flat, code, upto, above, etc.)\n"
-        f"- NEVER pick generic discount words or store names\n"
-        f"- Each pick must be a different category from what the user already asked about\n"
-        f"- For each pick, write a short chip label (2-4 words) like "
-        f"\"Shoe deals\", \"Try laptops\", \"Pizza offers\"\n"
-        f"- Vary the label style: sometimes \"X deals\", sometimes \"Try X\", "
-        f"sometimes \"X offers\", sometimes just the category name\n"
-    )
+    if available_keywords and store_name:
+        prompt = (
+            f"The user asked: \"{user_query}\"\n"
+            f"Store: {store_name}\n\n"
+            f"This store also has coupons mentioning these product keywords:\n"
+            f"{json.dumps(available_keywords)}\n\n"
+            f"Pick 2-3 keywords that represent genuinely different PRODUCT CATEGORIES "
+            f"the user might want to explore next on this same store.\n"
+            f"Rules:\n"
+            f"- Only pick real product/service names (shirts, laptops, flights, pizza, etc.)\n"
+            f"- NEVER pick noise words (rs, off, up, to, get, flat, code, upto, above, etc.)\n"
+            f"- NEVER pick generic discount words or store names\n"
+            f"- Each pick must be a different category from what the user already asked about\n"
+            f"- For each pick, write a short chip label (2-4 words) like "
+            f"\"Shoe deals\", \"Try laptops\", \"Pizza offers\"\n"
+            f"- Vary the label style: sometimes \"X deals\", sometimes \"Try X\", "
+            f"sometimes \"X offers\", sometimes just the category name\n"
+            f"- Also write a short intro line (under 10 words) above the chips. "
+            f"Vary it every time: \"Also on {store_name}:\", \"More from {store_name}\", "
+            f"\"You might also like\", \"Explore more deals\", etc. Never repeat the same intro."
+        )
+    else:
+        vert_names = [v["name"] for v in (sibling_verticals or [])]
+        prompt = (
+            f"The user asked: \"{user_query}\"\n\n"
+            f"These related categories also have active coupons:\n"
+            f"{json.dumps(vert_names)}\n\n"
+            f"Pick 2-3 categories the user might also want to explore.\n"
+            f"For each, write a short chip label (2-4 words) like "
+            f"\"Flight deals\", \"Try cab rides\", \"Hotel offers\"\n"
+            f"- Vary the label style each time\n"
+            f"- The keyword should be the exact category name from the list\n"
+            f"- Also write a short intro line (under 10 words) above the chips. "
+            f"Vary it every time: \"Related categories\", \"You might also need\", "
+            f"\"Explore more\", \"Also available\", etc. Never repeat the same intro."
+        )
 
     schema = {
         "type": "object",
         "properties": {
+            "intro": {"type": "string"},
             "suggestions": {
                 "type": "array",
                 "items": {
@@ -587,7 +611,7 @@ async def get_cross_sell_suggestions(
                 },
             },
         },
-        "required": ["suggestions"],
+        "required": ["intro", "suggestions"],
         "additionalProperties": False,
     }
 
@@ -601,7 +625,7 @@ async def get_cross_sell_suggestions(
                 "json_schema": {"name": "cross_sell_suggestions", "strict": True, "schema": schema},
             },
             temperature=0.7,
-            max_tokens=150,
+            max_tokens=200,
         )
         llm_logger.log_call(
             model         = "gpt-4o-mini",
@@ -613,13 +637,17 @@ async def get_cross_sell_suggestions(
         raw = resp.choices[0].message.content or ""
         parsed = json.loads(raw)
         suggestions = parsed.get("suggestions", [])
+        intro = (parsed.get("intro") or "").strip()
         if not suggestions:
             return None
-        return [
+        clean = [
             {"keyword": s["keyword"].strip(), "label": s["label"].strip()}
             for s in suggestions
             if s.get("keyword", "").strip() and s.get("label", "").strip()
-        ][:3] or None
+        ][:3]
+        if not clean:
+            return None
+        return {"intro": intro, "suggestions": clean}
     except Exception as e:
         log.warning("Cross-sell suggestion LLM call failed: %s", e)
         return None

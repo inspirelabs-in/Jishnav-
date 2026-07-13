@@ -88,6 +88,16 @@ _PARENT_CHILD_MAP = {
     2078: {2157, 2354}, # Recharge -> DTH, Utility
 }
 
+def get_vertical_family(vertical_id: int) -> set[int]:
+    """Return all vertical IDs in the same family (parent + all children).
+    Used for cross-sell: 'shirts on Myntra' should suggest pants (Fashion sibling)
+    but not headphones (Electronics - different family)."""
+    for parent_id, children in _PARENT_CHILD_MAP.items():
+        if vertical_id == parent_id or vertical_id in children:
+            return {parent_id} | children
+    return {vertical_id}
+
+
 def clean_redundant_verticals(vertical_ids: list[int]) -> list[int]:
     """Remove parent verticals if any of their child verticals are also matched."""
     if not vertical_ids or len(vertical_ids) <= 1:

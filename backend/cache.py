@@ -38,6 +38,15 @@ _stats: dict[str, int] = {"categories": 0, "stores": 0, "coupons_with_codes": 0}
 # Keyed by MerchantID so retriever lookups are O(1) per store.
 _coupon_cache: dict[int, list[dict]] = {}
 
+# keyword → set of store IDs whose coupons mention this keyword
+_keyword_to_store_ids: dict[str, set[int]] = {}
+
+# store_id → {keyword: count} — how many coupons on this store mention each keyword
+_store_keyword_counts: dict[int, dict[str, int]] = {}
+
+# store_id → set of vertical IDs the store belongs to (reverse of _vertical_to_stores)
+_store_to_verticals: dict[int, set[int]] = {}
+
 _lock = threading.Lock()
 
 
@@ -172,6 +181,37 @@ def build() -> None:
         len(best), len(new_coupon_cache),
     )
 
+    # ── Step 5: build keyword index from coupon names ────────────────────────
+    new_keyword_index: dict[str, set[int]] = {}
+    new_store_kw_counts: dict[int, dict[str, int]] = {}
+
+    for store_id, coupons in new_coupon_cache.items():
+        kw_counts: dict[str, int] = {}
+        for coupon in coupons:
+            name = (coupon.get("CouponName") or "").lower()
+            seen_words: set[str] = set()
+            for raw_word in name.split():
+                word = raw_word.strip(".,!?;:()'\"%-")
+                if not word or len(word) < 2:
+                    continue
+                if word in seen_words:
+                    continue
+                seen_words.add(word)
+                new_keyword_index.setdefault(word, set()).add(store_id)
+                kw_counts[word] = kw_counts.get(word, 0) + 1
+        new_store_kw_counts[store_id] = kw_counts
+
+    # ── Step 6: build store → verticals reverse map ──────────────────────────
+    new_store_to_verticals: dict[int, set[int]] = {}
+    for vid, stores_list in v2s.items():
+        for sid, _sname, _sfile in stores_list:
+            new_store_to_verticals.setdefault(sid, set()).add(vid)
+
+    log.info(
+        "Step 5-6: keyword index has %d unique keywords, store-vertical map has %d stores",
+        len(new_keyword_index), len(new_store_to_verticals),
+    )
+
     with _lock:
         _vertical_to_stores.clear()
         _vertical_to_stores.update(v2s)
@@ -185,6 +225,12 @@ def build() -> None:
         _valid_category_ids.update(valid_cats)
         _coupon_cache.clear()
         _coupon_cache.update(new_coupon_cache)
+        _keyword_to_store_ids.clear()
+        _keyword_to_store_ids.update(new_keyword_index)
+        _store_keyword_counts.clear()
+        _store_keyword_counts.update(new_store_kw_counts)
+        _store_to_verticals.clear()
+        _store_to_verticals.update(new_store_to_verticals)
         _stats["categories"]         = len(v2s)
         _stats["stores"]             = len(id2name)
         _stats["coupons_with_codes"] = len(best)
@@ -246,6 +292,30 @@ def get_all_coupons_flat() -> list[dict]:
     Used for brand-name fallback search when no store ID is known."""
     with _lock:
         return [dict(r) for coupons in _coupon_cache.values() for r in coupons]
+
+
+def get_store_ids_for_keyword(keyword: str) -> set[int]:
+    """Return store IDs whose coupons mention this keyword (O(1) lookup)."""
+    with _lock:
+        return set(_keyword_to_store_ids.get(keyword.lower(), set()))
+
+
+def get_store_keyword_counts(store_id: int) -> dict[str, int]:
+    """Return {keyword: count} for all keywords in this store's coupons."""
+    with _lock:
+        return dict(_store_keyword_counts.get(store_id, {}))
+
+
+def get_verticals_for_store(store_id: int) -> set[int]:
+    """Return the set of vertical IDs this store belongs to."""
+    with _lock:
+        return set(_store_to_verticals.get(store_id, set()))
+
+
+def store_has_coupons(store_id: int) -> bool:
+    """Check if a store has any active coded coupons in cache."""
+    with _lock:
+        return store_id in _coupon_cache and len(_coupon_cache[store_id]) > 0
 
 
 def start_refresh_loop() -> None:

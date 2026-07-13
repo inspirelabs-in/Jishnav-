@@ -424,6 +424,48 @@ async def chat(req: ChatRequest, request: Request):
                     yield _sse_done()
                     return
 
+                # User said yes to cross-sell suggestion
+                if route.pending_offer.startswith("cross_sell:"):
+                    _cs_parts = route.pending_offer[11:].split(":", 1)
+                    _cs_sid = int(_cs_parts[0])
+                    _cs_kws = _cs_parts[1].split(",") if len(_cs_parts) > 1 else []
+                    _cs_kw_lower = [kw.lower() for kw in _cs_kws]
+
+                    _cs_all = await retriever.get_coupons_for_stores([_cs_sid], limit=limit)
+                    _cs_coupons = [
+                        c for c in _cs_all
+                        if any(kw in (c.get("CouponName") or "").lower() for kw in _cs_kw_lower)
+                    ] if _cs_kw_lower else _cs_all
+
+                    if _cs_coupons:
+                        full_text = ""
+                        async for chunk in responder.stream_coupon_response(
+                            user_message=message,
+                            session_id=session_id,
+                            coupons=_cs_coupons,
+                            quota=_quota,
+                            store_scoped=True,
+                        ):
+                            if isinstance(chunk, str):
+                                yield _sse_text(chunk)
+                                full_text += chunk
+                            else:
+                                yield _sse_coupons(chunk["data"])
+                        await conv.add_message(session_id, conv.Message(role="user", content=message))
+                        await conv.add_message(session_id, conv.Message(
+                            role="assistant", content=full_text,
+                            store_ids=[_cs_sid],
+                            coupon_count=len(_cs_coupons),
+                            coupons=_cs_coupons,
+                        ))
+                    else:
+                        reply = "No active coupons found for those items right now."
+                        yield _sse_text(reply)
+                        await conv.add_message(session_id, conv.Message(role="user", content=message))
+                        await conv.add_message(session_id, conv.Message(role="assistant", content=reply))
+                    yield _sse_done()
+                    return
+
                 # Re-fetch DB coupons from prior context
                 # Special case: user said yes to new-user fallback offer
                 if route.pending_offer.startswith("new_user_fallback:"):
@@ -760,8 +802,24 @@ async def chat(req: ChatRequest, request: Request):
                         else:
                             _empty_sids.append(sid)
                 else:
-                    # Single-store query
-                    coupons, stores_searched = await _fetch(store_ids=route.store_ids)
+                    # Single-store query — dual-path: store + keyword cross-store
+                    if route.store_query_names:
+                        coupons = await retriever.get_coupons_dual_path(
+                            store_ids=route.store_ids,
+                            brand_keywords=route.store_query_names,
+                            limit=limit,
+                            min_discount=min_discount,
+                        )
+                        seen_sids: set[int] = set()
+                        stores_searched = []
+                        for c in coupons:
+                            sid = c.get("MerchantID")
+                            sname = c.get("StoreName", "")
+                            if sid and sname and sid not in seen_sids:
+                                seen_sids.add(sid)
+                                stores_searched.append((sid, sname))
+                    else:
+                        coupons, stores_searched = await _fetch(store_ids=route.store_ids)
                     # Requested store has zero live coupons at all. Only substitute
                     # sibling stores from the same vertical when that vertical is on
                     # the safe-to-widen list (Bus, Flight, Hotel, Cab, Recharge, Food
@@ -1136,6 +1194,25 @@ async def chat(req: ChatRequest, request: Request):
                 _note = f"\n\nNo active coupon codes found for {_missing} on GrabOn right now."
                 yield _sse_text(_note)
                 full_text += _note
+
+            # Cross-sell: suggest related products on the same store
+            if (route.store_ids and len(route.store_ids) == 1
+                    and coupons and not _widened_from_store and not pending):
+                _cs_family = set()
+                for _vid in (route.vertical_ids or []):
+                    _cs_family |= vertical_classifier.get_vertical_family(_vid)
+                _cs_keywords = retriever.get_cross_sell_keywords(
+                    store_id=route.store_ids[0],
+                    user_query=route.corrected_query or message,
+                    vertical_family=_cs_family,
+                )
+                if _cs_keywords:
+                    _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
+                    _cs_items = ", ".join(_cs_keywords[:3])
+                    _cs_note = f"\n\nWe also have great offers on {_cs_items} at {_cs_store}. Would you like to see them?"
+                    yield _sse_text(_cs_note)
+                    full_text += _cs_note
+                    pending = f"cross_sell:{route.store_ids[0]}:{','.join(_cs_keywords[:3])}"
 
             await conv.add_message(session_id, conv.Message(role="user", content=message))
             await conv.add_message(session_id, conv.Message(

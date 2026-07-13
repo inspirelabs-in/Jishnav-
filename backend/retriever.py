@@ -179,18 +179,28 @@ async def get_coupons_for_verticals_with_location(
 
 async def get_coupons_by_brand_name(brand: str, limit: int = 20) -> list[dict]:
     """
-    Fallback brand search: scan all cached coupons for CouponName containing
-    the brand string (case-insensitive). Only runs when the store-based
-    lookup returns 0 results.
+    Brand search using the keyword index (O(1) store lookup) instead of
+    scanning all 10K cached coupons. Finds coupons whose CouponName
+    contains the brand string, across all stores in the index.
     """
     if not brand or not brand.strip():
         return []
 
     brand_lower = brand.strip().lower()
-    rows = [
-        r for r in cache.get_all_coupons_flat()
-        if brand_lower in (r.get("CouponName") or "").lower()
-    ]
+    tokens = brand_lower.split()
+
+    store_ids: set[int] = set()
+    for tok in tokens:
+        store_ids |= cache.get_store_ids_for_keyword(tok)
+
+    if not store_ids:
+        return []
+
+    rows: list[dict] = []
+    for sid in store_ids:
+        for r in cache.get_coupons_for_merchant(sid):
+            if brand_lower in (r.get("CouponName") or "").lower():
+                rows.append(r)
 
     rows.sort(key=lambda r: (
         0 if r.get("Verified") else 1,
@@ -199,3 +209,85 @@ async def get_coupons_by_brand_name(brand: str, limit: int = 20) -> list[dict]:
         -(r.get("Discount") or 0),
     ))
     return _enrich_and_filter_live(rows[:limit])
+
+
+async def get_coupons_dual_path(
+    store_ids: list[int],
+    brand_keywords: list[str],
+    limit: int = 30,
+    min_discount: float | None = None,
+) -> list[dict]:
+    """
+    Dual-path retrieval: fetch from the matched store(s) AND from other
+    stores whose coupons mention the brand keyword. Merges and ranks
+    the combined results so the user sees the best deals regardless of
+    which store they're on.
+    """
+    store_coupons = await get_coupons_for_stores(
+        store_ids, limit=limit, min_discount=min_discount,
+    )
+
+    existing_ids = {c.get("CouponID") for c in store_coupons}
+    excluded = set(store_ids)
+    kw_rows: list[dict] = []
+
+    for kw in brand_keywords:
+        kw_lower = kw.lower()
+        kw_store_ids = cache.get_store_ids_for_keyword(kw_lower) - excluded
+        for sid in kw_store_ids:
+            for r in cache.get_coupons_for_merchant(sid):
+                cid = r.get("CouponID")
+                if cid not in existing_ids and kw_lower in (r.get("CouponName") or "").lower():
+                    kw_rows.append(r)
+                    existing_ids.add(cid)
+
+    kw_enriched = _enrich_and_filter_live(kw_rows)
+
+    all_coupons = store_coupons + kw_enriched
+    all_coupons.sort(key=lambda r: (
+        0 if r.get("Verified") else 1,
+        0 if r.get("BestOffer") else 1,
+        0 if r.get("HotOffer") else 1,
+        -(r.get("Discount") or 0),
+    ))
+    return all_coupons[:limit]
+
+
+def get_cross_sell_keywords(
+    store_id: int,
+    user_query: str,
+    vertical_family: set[int],
+) -> list[str]:
+    """
+    Find product keywords for cross-sell suggestions.
+    Checks: same store + same vertical family + has active coupons.
+    Returns up to 5 meaningful keywords sorted by frequency.
+    """
+    store_verticals = cache.get_verticals_for_store(store_id)
+    if vertical_family and not (store_verticals & vertical_family):
+        return []
+
+    kw_counts = cache.get_store_keyword_counts(store_id)
+    if not kw_counts:
+        return []
+
+    total_coupons = len(cache.get_coupons_for_merchant(store_id))
+    if total_coupons == 0:
+        return []
+
+    query_words = set(user_query.lower().split())
+
+    meaningful: list[tuple[str, int]] = []
+    for kw, count in kw_counts.items():
+        if kw in query_words:
+            continue
+        if kw.isdigit():
+            continue
+        if count > total_coupons * 0.8:
+            continue
+        if count < 2:
+            continue
+        meaningful.append((kw, count))
+
+    meaningful.sort(key=lambda x: -x[1])
+    return [kw for kw, _ in meaningful[:5]]

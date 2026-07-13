@@ -22,6 +22,9 @@ _vertical_to_stores: dict[int, list[tuple[int, str, str]]] = {}
 # store_id -> store_name
 _store_id_to_name: dict[int, str] = {}
 
+# store_id -> website domain (e.g. "myntra.com")
+_store_id_to_website: dict[int, str] = {}
+
 # non-canonical vertical_id → canonical vertical_id
 _merge_map: dict[int, int] = {}
 
@@ -95,7 +98,7 @@ def build() -> None:
     placeholders = ",".join("?" * len(valid_stores))
     store_rows = db.query(
         f"""
-        SELECT CategoryID, CategoryName, Breadcrumb1, Breadcrumb2, CategoryFileName
+        SELECT CategoryID, CategoryName, Breadcrumb1, Breadcrumb2, CategoryFileName, Website
         FROM   {config.CATEGORIES_TABLE}
         WHERE  CategoryTypeID = 1
           AND  Status = 1
@@ -107,6 +110,7 @@ def build() -> None:
     # ── Step 3: build vertical → store mapping ────────────────────────────────
     v2s: dict[int, list[tuple[int, str, str]]] = {}
     id2name: dict[int, str] = {}
+    id2website: dict[int, str] = {}
     valid_cats: set[int] = set()
 
     for r in store_rows:
@@ -114,6 +118,9 @@ def build() -> None:
         sname = (r["CategoryName"] or "").strip()
         sfile = r["CategoryFileName"] or ""
         id2name[sid] = sname
+        website = (r.get("Website") or "").strip()
+        if website:
+            id2website[sid] = website
 
         for bc_field in ("Breadcrumb1", "Breadcrumb2"):
             vid = r.get(bc_field) or 0
@@ -177,6 +184,8 @@ def build() -> None:
         _vertical_to_stores.update(v2s)
         _store_id_to_name.clear()
         _store_id_to_name.update(id2name)
+        _store_id_to_website.clear()
+        _store_id_to_website.update(id2website)
         _merge_map.clear()
         _merge_map.update(merge)
         _valid_store_ids.clear()
@@ -211,6 +220,11 @@ def get_stores_for_verticals(vertical_ids: list[int]) -> list[tuple[int, str]]:
 def get_store_name(store_id: int) -> str:
     with _lock:
         return _store_id_to_name.get(store_id, "")
+
+
+def get_store_website(store_id: int) -> str:
+    with _lock:
+        return _store_id_to_website.get(store_id, "")
 
 
 def get_valid_store_ids() -> set[int]:

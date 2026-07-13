@@ -1,6 +1,7 @@
 export interface Coupon {
   couponId: number;
   storeName: string;
+  storeLogoUrl?: string;
   couponName: string;
   couponCode: string;
   couponUrl: string;

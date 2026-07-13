@@ -5,6 +5,7 @@ Handles both coupon responses and conversational narrowing questions.
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -538,6 +539,18 @@ async def stream_coupon_response(
     yield {"type": "coupons", "data": _serialise_coupons(coupons)}
 
 
+def _build_logo_url(website: str) -> str:
+    """Build a Google Favicon URL from a store's website domain."""
+    if not website:
+        return ""
+    host = website.lower().strip()
+    host = re.sub(r"^[a-z]+://", "", host)
+    host = host.split("/", 1)[0]
+    if not host:
+        return ""
+    return f"https://www.google.com/s2/favicons?domain={host}&sz=64"
+
+
 def _serialise_coupons(coupons: list[dict]) -> list[dict]:
     """Convert coupon dicts to JSON-safe format for the frontend."""
     safe = []
@@ -545,6 +558,7 @@ def _serialise_coupons(coupons: list[dict]) -> list[dict]:
         safe.append({
             "couponId":         c.get("CouponID"),
             "storeName":        c.get("StoreName", ""),
+            "storeLogoUrl":     _build_logo_url(c.get("StoreWebsite", "")),
             "couponName":       c.get("CouponName", ""),
             "couponCode":       c.get("CouponCode") or "",
             "couponUrl":        c.get("CouponUrl") or "",

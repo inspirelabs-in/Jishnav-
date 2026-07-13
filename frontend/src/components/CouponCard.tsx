@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Coupon } from "../types";
 
 
@@ -19,6 +19,33 @@ function urgencyConfig(u: Coupon["validityUrgency"]) {
   }
 }
 
+
+/* ─────────────────────────────────────────────────────────
+   StoreLogo — favicon image with letter-initial fallback
+   ───────────────────────────────────────────────────────── */
+function StoreLogo({ storeName, logoUrl }: { storeName: string; logoUrl?: string }) {
+  const [failed, setFailed] = useState(false);
+  const onError = useCallback(() => setFailed(true), []);
+
+  if (logoUrl && !failed) {
+    return (
+      <img
+        src={logoUrl}
+        alt={storeName}
+        onError={onError}
+        className="w-8 h-8 rounded-lg shrink-0 object-contain"
+        style={{ background: "var(--brand-10)", border: "1px solid var(--brand-20)", padding: "4px" }}
+      />
+    );
+  }
+
+  return (
+    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-[13px] font-bold"
+      style={{ background: "var(--brand-10)", color: "var(--brand-dark)", border: "1px solid var(--brand-20)", fontFamily: "GothamRnd, sans-serif" }}>
+      {storeName.charAt(0).toUpperCase()}
+    </div>
+  );
+}
 
 /* ─────────────────────────────────────────────────────────
    CouponPanel — list deal tickets
@@ -183,11 +210,8 @@ function DealTicket({ coupon, isDark, index }: { coupon: Coupon; isDark: boolean
           {/* Store row */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
-              {/* Store initial */}
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-[13px] font-bold"
-                style={{ background: "var(--brand-10)", color: "var(--brand-dark)", border: "1px solid var(--brand-20)", fontFamily: "GothamRnd, sans-serif" }}>
-                {coupon.storeName.charAt(0).toUpperCase()}
-              </div>
+              {/* Store logo with letter-initial fallback */}
+              <StoreLogo storeName={coupon.storeName} logoUrl={coupon.storeLogoUrl} />
               <div className="min-w-0">
                 <p className="text-[13px] font-bold leading-tight truncate"
                   style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif", letterSpacing: "-0.01em" }}>

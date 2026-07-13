@@ -7,6 +7,7 @@ is handled by vertical_classifier. This module orchestrates the result into a Ro
 
 import logging
 
+import cache
 import store_index
 import vertical_classifier
 import conversation as conv
@@ -166,7 +167,25 @@ async def route(message: str, session_id: str) -> RouteResult:
             r.store_ids    = [s[0] for s in stores]
             r.vertical_ids = result.matched_ids
             return r
-        # None of the named brand(s) resolved to any store.
+
+        # None of the named brand(s) resolved to any store in the index.
+        # Last resort: check the coupon keyword index — other stores may
+        # have coupons mentioning this brand (e.g. PhonePe's "KFC Orders",
+        # Nearbuy's "KFC Gift Cards"). This catches brands that don't have
+        # their own store page but appear in coupon names across the DB.
+        _kw_store_ids: set[int] = set()
+        for name in result.store_names:
+            for token in name.lower().split():
+                if len(token) >= 2:
+                    _kw_store_ids |= cache.get_store_ids_for_keyword(token)
+        if _kw_store_ids:
+            r.query_type       = "A"
+            r.store_ids        = list(_kw_store_ids)
+            r.vertical_ids     = result.matched_ids
+            r.brand_name_hint  = " ".join(result.store_names)
+            log.info("Keyword-index fallback for %r found %d stores", result.store_names, len(_kw_store_ids))
+            return r
+
         # Save as hint so main.py can filter vertical coupons by brand name
         # and offer web search if nothing matches.
         r.brand_name_hint = " ".join(result.store_names)

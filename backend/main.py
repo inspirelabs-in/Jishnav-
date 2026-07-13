@@ -1127,6 +1127,27 @@ async def chat(req: ChatRequest, request: Request):
                 ]
                 _already_selected = True
 
+            # Product-keyword pre-filter: when user asks "kurti on AJIO" or
+            # "shoes coupons on Myntra", narrow the coupon pool to those whose
+            # CouponName mentions the product keyword BEFORE tier-fill runs.
+            # Without this, sitewide coupons outrank product-relevant ones
+            # (tier order: sitewide > relevant > synonym > catch-all), and
+            # every cross-sell chip click returns the same top-3 sitewide set.
+            # Falls back to the full pool when no keyword matches are found.
+            if (route.store_ids and coupons
+                    and not _widened_from_store and not _already_selected):
+                _product_kws = _extract_product_keywords(
+                    route.corrected_query or message,
+                    route.store_query_names or [],
+                )
+                if _product_kws:
+                    _kw_filtered = [
+                        c for c in coupons
+                        if any(kw in (c.get("CouponName") or "").lower() for kw in _product_kws)
+                    ]
+                    if _kw_filtered:
+                        coupons = _kw_filtered
+
             # Fire cross-sell LLM call in parallel with the main response stream
             # so users don't see the ~1.5s delay after coupons load.
             _cs_task = None
@@ -1278,6 +1299,23 @@ def _extract_web_category(pending_offer: str) -> str:
              "offer", "offers", "promo", "discount", "off", "working", "free"}
     words = [w for w in raw.split() if w.lower() not in noise]
     return " ".join(words).strip() or raw
+
+
+def _extract_product_keywords(query: str, store_names: list[str]) -> list[str]:
+    """Extract product-specific words from the query after removing store names and noise."""
+    _NOISE = {
+        "coupon", "coupons", "code", "codes", "deal", "deals", "offer", "offers",
+        "promo", "discount", "off", "best", "show", "give", "me", "get", "find",
+        "on", "for", "the", "a", "an", "in", "of", "with", "and", "or", "to",
+        "from", "at", "by", "up", "is", "it", "i", "my", "any", "some", "top",
+        "latest", "new", "working", "active", "today", "please", "want", "need",
+        "looking", "search", "free",
+    }
+    q = query.lower()
+    for name in store_names:
+        q = q.replace(name.lower(), " ")
+    words = q.split()
+    return [w for w in words if w not in _NOISE and len(w) >= 3]
 
 
 def _extract_related_vids(pending_offer: str) -> list[int]:

@@ -838,6 +838,12 @@ async def chat(req: ChatRequest, request: Request):
                         for tok in _bh_tokens
                     )
                 ]
+                if _brand_matches and len(_brand_matches) > 1:
+                    _verified = await responder.filter_brand_coupons(
+                        route.brand_name_hint, _brand_matches
+                    )
+                    if _verified:
+                        _brand_matches = _verified
                 if not _brand_matches:
                     # Vertical fetch didn't surface this brand — try LIKE fallback per token.
                     # "HP Omen" → try LIKE '%HP%' and LIKE '%Omen%' separately. Skip any
@@ -1153,30 +1159,34 @@ async def chat(req: ChatRequest, request: Request):
             _cs_task = None
             if coupons and not _widened_from_store and not pending:
                 if route.store_ids and len(route.store_ids) == 1:
-                    _cs_family = set()
-                    for _vid in (route.vertical_ids or []):
-                        _cs_family |= vertical_classifier.get_vertical_family(_vid)
-                    _cs_raw_keywords = retriever.get_cross_sell_keywords(
-                        store_id=route.store_ids[0],
-                        user_query=route.corrected_query or message,
-                        vertical_family=_cs_family,
-                    )
-                    if _cs_raw_keywords:
-                        _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
+                    _cs_coupon_count = len(cache.get_coupons_for_merchant(route.store_ids[0]))
+                    if _cs_coupon_count < 6:
+                        pass  # skip cross-sell for stores with fewer than 6 distinct coupons
+                    else:
+                        _cs_family = set()
+                        for _vid in (route.vertical_ids or []):
+                            _cs_family |= vertical_classifier.get_vertical_family(_vid)
+                        _cs_raw_keywords = retriever.get_cross_sell_keywords(
+                            store_id=route.store_ids[0],
+                            user_query=route.corrected_query or message,
+                            vertical_family=_cs_family,
+                        )
+                        if _cs_raw_keywords:
+                            _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
 
-                        async def _fetch_store_cs():
-                            r = await responder.get_cross_sell_suggestions(
-                                user_query=route.corrected_query or message,
-                                available_keywords=_cs_raw_keywords,
-                                store_name=_cs_store,
-                            )
-                            if r:
-                                for s in r["suggestions"]:
-                                    s["store_id"] = route.store_ids[0]
-                                    s["store_name"] = _cs_store
-                            return r
+                            async def _fetch_store_cs():
+                                r = await responder.get_cross_sell_suggestions(
+                                    user_query=route.corrected_query or message,
+                                    available_keywords=_cs_raw_keywords,
+                                    store_name=_cs_store,
+                                )
+                                if r:
+                                    for s in r["suggestions"]:
+                                        s["store_id"] = route.store_ids[0]
+                                        s["store_name"] = _cs_store
+                                return r
 
-                        _cs_task = asyncio.create_task(_fetch_store_cs())
+                            _cs_task = asyncio.create_task(_fetch_store_cs())
 
                 elif route.vertical_ids and not route.store_ids:
                     _siblings = vertical_classifier.get_sibling_verticals(route.vertical_ids)

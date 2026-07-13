@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Coupon } from "../types";
 
 
@@ -19,6 +19,41 @@ function urgencyConfig(u: Coupon["validityUrgency"]) {
   }
 }
 
+
+/* ── Store logo with letter-initial fallback ── */
+function StoreLogo({ storeName, faviconUrl }: { storeName: string; faviconUrl: string }) {
+  const [failed, setFailed] = useState(false);
+
+  const boxStyle = {
+    background: "var(--brand-10)",
+    color: "var(--brand-dark)",
+    border: "1px solid var(--brand-20)",
+    fontFamily: "GothamRnd, sans-serif",
+  };
+
+  if (!faviconUrl || failed) {
+    return (
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-[13px] font-bold"
+        style={boxStyle}>
+        {storeName.charAt(0).toUpperCase()}
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden"
+      style={boxStyle}>
+      <img
+        src={faviconUrl}
+        alt={storeName}
+        width={20}
+        height={20}
+        style={{ objectFit: "contain" }}
+        onError={() => setFailed(true)}
+      />
+    </div>
+  );
+}
 
 /* ─────────────────────────────────────────────────────────
    CouponPanel — list deal tickets
@@ -183,11 +218,8 @@ function DealTicket({ coupon, isDark, index }: { coupon: Coupon; isDark: boolean
           {/* Store row */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
-              {/* Store initial */}
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-[13px] font-bold"
-                style={{ background: "var(--brand-10)", color: "var(--brand-dark)", border: "1px solid var(--brand-20)", fontFamily: "GothamRnd, sans-serif" }}>
-                {coupon.storeName.charAt(0).toUpperCase()}
-              </div>
+              {/* Store logo / initial fallback */}
+              <StoreLogo storeName={coupon.storeName} faviconUrl={coupon.faviconUrl} />
               <div className="min-w-0">
                 <p className="text-[13px] font-bold leading-tight truncate"
                   style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif", letterSpacing: "-0.01em" }}>

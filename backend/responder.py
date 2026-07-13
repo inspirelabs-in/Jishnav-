@@ -676,5 +676,6 @@ def _serialise_coupons(coupons: list[dict]) -> list[dict]:
             "validityLabel":    c.get("validity_label", ""),
             "validityUrgency":  c.get("validity_urgency", "valid"),
             "endDate":          c["EndDate"].isoformat() if c.get("EndDate") else None,
+            "faviconUrl":       c.get("FaviconUrl") or "",
         })
     return safe

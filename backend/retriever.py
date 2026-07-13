@@ -30,6 +30,7 @@ def _enrich_and_filter_live(rows: list[dict]) -> list[dict]:
         r["StoreName"] = cache.get_store_name(r["MerchantID"])
         if not r["StoreName"]:
             continue
+        r["FaviconUrl"] = cache.get_store_favicon(r["MerchantID"])
         validity.enrich_coupon(r)
         if r.get("validity_urgency") != "expired":
             live.append(r)

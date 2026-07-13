@@ -17,6 +17,7 @@ export interface Coupon {
   validityLabel: string;
   validityUrgency: "expires_today" | "expires_soon" | "valid" | "no_expiry" | "expired";
   endDate: string | null;
+  faviconUrl: string;
   isWebResult?: boolean;
 }
 

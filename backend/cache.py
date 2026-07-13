@@ -47,6 +47,9 @@ _store_keyword_counts: dict[int, dict[str, int]] = {}
 # store_id → set of vertical IDs the store belongs to (reverse of _vertical_to_stores)
 _store_to_verticals: dict[int, set[int]] = {}
 
+# store_id → Google Favicon URL built from the store's Website field
+_store_id_to_favicon: dict[int, str] = {}
+
 _lock = threading.Lock()
 
 
@@ -104,7 +107,7 @@ def build() -> None:
     placeholders = ",".join("?" * len(valid_stores))
     store_rows = db.query(
         f"""
-        SELECT CategoryID, CategoryName, Breadcrumb1, Breadcrumb2, CategoryFileName
+        SELECT CategoryID, CategoryName, Breadcrumb1, Breadcrumb2, CategoryFileName, Website
         FROM   {config.CATEGORIES_TABLE}
         WHERE  CategoryTypeID = 1
           AND  Status = 1
@@ -118,11 +121,19 @@ def build() -> None:
     id2name: dict[int, str] = {}
     valid_cats: set[int] = set()
 
+    id2favicon: dict[int, str] = {}
+
     for r in store_rows:
         sid   = r["CategoryID"]
         sname = (r["CategoryName"] or "").strip()
         sfile = r["CategoryFileName"] or ""
         id2name[sid] = sname
+
+        website = (r.get("Website") or "").strip()
+        if website:
+            domain = website.split("//")[-1].split("/")[0].split("?")[0]
+            if domain:
+                id2favicon[sid] = f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
 
         for bc_field in ("Breadcrumb1", "Breadcrumb2"):
             vid = r.get(bc_field) or 0
@@ -231,13 +242,15 @@ def build() -> None:
         _store_keyword_counts.update(new_store_kw_counts)
         _store_to_verticals.clear()
         _store_to_verticals.update(new_store_to_verticals)
+        _store_id_to_favicon.clear()
+        _store_id_to_favicon.update(id2favicon)
         _stats["categories"]         = len(v2s)
         _stats["stores"]             = len(id2name)
         _stats["coupons_with_codes"] = len(best)
 
     log.info(
-        "Cache built: %d categories, %d stores, %d distinct coupons",
-        len(v2s), len(id2name), len(best),
+        "Cache built: %d categories, %d stores, %d distinct coupons, %d favicons",
+        len(v2s), len(id2name), len(best), len(id2favicon),
     )
 
 
@@ -257,6 +270,11 @@ def get_stores_for_verticals(vertical_ids: list[int]) -> list[tuple[int, str]]:
 def get_store_name(store_id: int) -> str:
     with _lock:
         return _store_id_to_name.get(store_id, "")
+
+
+def get_store_favicon(store_id: int) -> str:
+    with _lock:
+        return _store_id_to_favicon.get(store_id, "")
 
 
 def get_valid_store_ids() -> set[int]:

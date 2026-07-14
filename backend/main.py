@@ -1250,9 +1250,7 @@ async def chat(req: ChatRequest, request: Request):
                 try:
                     _cs_line = await _cs_task
                     if _cs_line:
-                        _cs_text = f"\n\n{_cs_line}"
-                        yield _sse_text(_cs_text)
-                        full_text += _cs_text
+                        yield _sse("cross_sell_text", json.dumps(_cs_line))
                 except Exception as e:
                     log.warning("Cross-sell task failed: %s", e)
 

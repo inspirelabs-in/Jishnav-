@@ -47,6 +47,7 @@ export interface Message {
   content: string;
   coupons?: Coupon[];
   crossSell?: CrossSellData;
+  crossSellText?: string;
   isStreaming?: boolean;
   isWebResult?: boolean;
   /** Set from the "meta" SSE event, before any text arrives. Undefined until

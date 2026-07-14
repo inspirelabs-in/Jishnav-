@@ -59,6 +59,20 @@ export function MessageBubble({ message, isDark, onSend }: Props) {
         {message.coupons && message.coupons.length > 0 && (
           <CouponPanel coupons={message.coupons} isDark={isDark} />
         )}
+        {!message.isStreaming && message.crossSellText && (
+          <p
+            className="text-[13px] leading-relaxed"
+            style={{
+              color: "var(--text-3, var(--text-2))",
+              fontFamily: "GothamRnd, sans-serif",
+              fontWeight: 400,
+              fontStyle: "italic",
+              opacity: 0.85,
+              margin: 0,
+            }}>
+            {message.crossSellText}
+          </p>
+        )}
       </div>
     </div>
   );

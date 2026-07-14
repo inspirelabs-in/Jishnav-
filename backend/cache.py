@@ -119,20 +119,21 @@ def build() -> None:
     )
 
     # ── Step 2b: load store logos from dbo.Image ──────────────────────────────
-    # ImageID in dbo.Image maps 1:1 to CategoryID in dbo.Category
+    # dbo.Category.ImageID → dbo.Image.ImageID → ThumbImage
     image_rows = db.query(
         f"""
-        SELECT ImageID, ThumbImage
-        FROM   dbo.Image
-        WHERE  ImageID IN ({placeholders})
-          AND  ThumbImage IS NOT NULL
-          AND  ThumbImage != ''
+        SELECT c.CategoryID, i.ThumbImage
+        FROM   {config.CATEGORIES_TABLE} c
+        JOIN   dbo.Image i ON i.ImageID = c.ImageID
+        WHERE  c.CategoryID IN ({placeholders})
+          AND  i.ThumbImage IS NOT NULL
+          AND  i.ThumbImage != ''
         """,
         tuple(valid_stores),
     )
     id2logo: dict[int, str] = {}
     for ir in image_rows:
-        sid = ir["ImageID"]
+        sid = ir["CategoryID"]
         thumb = (ir.get("ThumbImage") or "").strip()
         if thumb and sid not in id2logo:
             id2logo[sid] = f"{_LOGO_CDN_BASE}{thumb}"

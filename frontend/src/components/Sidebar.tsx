@@ -249,7 +249,7 @@ export function Sidebar({
                 <span className="text-[13px] font-bold truncate" style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif" }}>
                   {user?.name || "User"}
                 </span>
-                <span className="text-[10px] truncate" style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}>
+                <span className="text-[10px] font-medium truncate" style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}>
                   {user?.email || ""}
                 </span>
               </div>
@@ -289,7 +289,7 @@ export function Sidebar({
                 <span className="text-[13px] font-bold" style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif" }}>
                   Guest Mode
                 </span>
-                <span className="text-[10px]" style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}>
+                <span className="text-[10px] font-medium" style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}>
                   4-message limit
                 </span>
               </div>

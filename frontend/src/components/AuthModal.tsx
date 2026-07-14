@@ -97,7 +97,7 @@ export function AuthModal({ isOpen, variant, onLogin, onGuestAccess, onClose }: 
         </h2>
 
         {/* Subtitle / Description */}
-        <p className="text-[14px] leading-relaxed mb-8 px-2" style={{ color: "var(--text-2)", fontFamily: "GothamRnd, sans-serif" }}>
+        <p className="text-[14px] font-medium leading-relaxed mb-8 px-2" style={{ color: "var(--text-2)", fontFamily: "GothamRnd, sans-serif" }}>
           {isLimitReached
             ? "You've used all 4 free guest messages. Sign in with Google to continue finding the best coupons and saving on GrabOn."
             : "Sign in with Google to unlock persistent chat history, personalized deal recommendations, and unlimited coupon searches."}
@@ -140,7 +140,7 @@ export function AuthModal({ isOpen, variant, onLogin, onGuestAccess, onClose }: 
           {!isLimitReached && onGuestAccess ? (
             <button
               onClick={onGuestAccess}
-              className="pressable text-[13px] font-medium transition-colors"
+              className="pressable text-[13px] font-bold transition-colors"
               style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text-2)"}
               onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-3)"}
@@ -150,7 +150,7 @@ export function AuthModal({ isOpen, variant, onLogin, onGuestAccess, onClose }: 
           ) : isLimitReached && onClose ? (
             <button
               onClick={onClose}
-              className="pressable text-[13px] font-medium transition-colors"
+              className="pressable text-[13px] font-bold transition-colors"
               style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text-2)"}
               onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-3)"}

@@ -220,13 +220,21 @@ async def get_coupons_dual_path(
 ) -> list[dict]:
     """
     Dual-path retrieval: fetch from the matched store(s) AND from other
-    stores whose coupons mention the brand keyword. Merges and ranks
-    the combined results so the user sees the best deals regardless of
-    which store they're on.
+    stores whose coupons mention the brand keyword. Only cross-store
+    coupons from the same vertical (business category) as the primary
+    store are included — prevents e.g. a hosting coupon mentioning
+    "Air India" from appearing in flight results.
     """
     store_coupons = await get_coupons_for_stores(
         store_ids, limit=limit, min_discount=min_discount,
     )
+
+    # Build the set of verticals the primary store(s) belong to.
+    # Cross-store coupons are only included when their store shares
+    # at least one vertical — this keeps results category-relevant.
+    primary_verticals: set[int] = set()
+    for sid in store_ids:
+        primary_verticals |= cache.get_verticals_for_store(sid)
 
     existing_ids = {c.get("CouponID") for c in store_coupons}
     excluded = set(store_ids)
@@ -236,6 +244,8 @@ async def get_coupons_dual_path(
         kw_lower = kw.lower()
         kw_store_ids = cache.get_store_ids_for_keyword(kw_lower) - excluded
         for sid in kw_store_ids:
+            if primary_verticals and not (cache.get_verticals_for_store(sid) & primary_verticals):
+                continue
             for r in cache.get_coupons_for_merchant(sid):
                 cid = r.get("CouponID")
                 if cid not in existing_ids and kw_lower in (r.get("CouponName") or "").lower():

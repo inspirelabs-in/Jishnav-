@@ -555,7 +555,7 @@ async def stream_coupon_response(
         yield "I couldn't find coupons that specifically match what you're looking for on GrabOn right now."
         return
 
-    coupons  = _prioritise_coupons(coupons)
+    coupons  = _prioritise_coupons(coupons)[:quota]
 
     history  = await conv.get_history(session_id)
     messages = _history_to_messages(history)

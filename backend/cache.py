@@ -47,8 +47,10 @@ _store_keyword_counts: dict[int, dict[str, int]] = {}
 # store_id → set of vertical IDs the store belongs to (reverse of _vertical_to_stores)
 _store_to_verticals: dict[int, set[int]] = {}
 
-# store_id → Google Favicon URL built from the store's Website field
-_store_id_to_favicon: dict[int, str] = {}
+# store_id → CDN logo URL built from dbo.Image.ThumbImage
+_store_id_to_logo: dict[int, str] = {}
+
+_LOGO_CDN_BASE = "https://cdn.grabon.in/gograbon/images/merchant/"
 
 _lock = threading.Lock()
 
@@ -116,24 +118,36 @@ def build() -> None:
         tuple(valid_stores),
     )
 
+    # ── Step 2b: load store logos from dbo.Image ──────────────────────────────
+    image_rows = db.query(
+        f"""
+        SELECT CategoryID, ThumbImage
+        FROM   dbo.Image
+        WHERE  CategoryID IN ({placeholders})
+          AND  ThumbImage IS NOT NULL
+          AND  ThumbImage != ''
+        """,
+        tuple(valid_stores),
+    )
+    id2logo: dict[int, str] = {}
+    for ir in image_rows:
+        sid = ir["CategoryID"]
+        thumb = (ir.get("ThumbImage") or "").strip()
+        if thumb and sid not in id2logo:
+            id2logo[sid] = f"{_LOGO_CDN_BASE}{thumb}"
+
+    log.info("Step 2b: loaded %d store logos from dbo.Image", len(id2logo))
+
     # ── Step 3: build vertical → store mapping ────────────────────────────────
     v2s: dict[int, list[tuple[int, str, str]]] = {}
     id2name: dict[int, str] = {}
     valid_cats: set[int] = set()
-
-    id2favicon: dict[int, str] = {}
 
     for r in store_rows:
         sid   = r["CategoryID"]
         sname = (r["CategoryName"] or "").strip()
         sfile = r["CategoryFileName"] or ""
         id2name[sid] = sname
-
-        website = (r.get("Website") or "").strip()
-        if website:
-            domain = website.split("//")[-1].split("/")[0].split("?")[0]
-            if domain:
-                id2favicon[sid] = f"https://{domain}/favicon.ico"
 
         for bc_field in ("Breadcrumb1", "Breadcrumb2"):
             vid = r.get(bc_field) or 0
@@ -242,15 +256,15 @@ def build() -> None:
         _store_keyword_counts.update(new_store_kw_counts)
         _store_to_verticals.clear()
         _store_to_verticals.update(new_store_to_verticals)
-        _store_id_to_favicon.clear()
-        _store_id_to_favicon.update(id2favicon)
+        _store_id_to_logo.clear()
+        _store_id_to_logo.update(id2logo)
         _stats["categories"]         = len(v2s)
         _stats["stores"]             = len(id2name)
         _stats["coupons_with_codes"] = len(best)
 
     log.info(
-        "Cache built: %d categories, %d stores, %d distinct coupons, %d favicons",
-        len(v2s), len(id2name), len(best), len(id2favicon),
+        "Cache built: %d categories, %d stores, %d distinct coupons, %d logos",
+        len(v2s), len(id2name), len(best), len(id2logo),
     )
 
 
@@ -273,8 +287,9 @@ def get_store_name(store_id: int) -> str:
 
 
 def get_store_favicon(store_id: int) -> str:
+    """Return CDN logo URL for a store (from dbo.Image.ThumbImage)."""
     with _lock:
-        return _store_id_to_favicon.get(store_id, "")
+        return _store_id_to_logo.get(store_id, "")
 
 
 def get_valid_store_ids() -> set[int]:

@@ -184,6 +184,14 @@ function DealTicket({ coupon, isDark, index }: { coupon: Coupon; isDark: boolean
           {/* Store row */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
+              {coupon.faviconUrl && (
+                <img
+                  src={coupon.faviconUrl}
+                  alt=""
+                  className="w-5 h-5 rounded object-contain shrink-0"
+                  onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                />
+              )}
               <div className="min-w-0">
                 <p className="text-[13px] font-bold leading-tight truncate"
                   style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif", letterSpacing: "-0.01em" }}>

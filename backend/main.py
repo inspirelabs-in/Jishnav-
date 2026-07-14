@@ -6,6 +6,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 import uvicorn
 import asyncio
@@ -37,19 +38,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="GrabonGPT API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins     = config.CORS_ALLOWED_ORIGINS,
-    allow_credentials = True,
-    allow_methods     = ["*"],
-    allow_headers     = ["*"],
-)
-
-
-# ── Startup ────────────────────────────────────────────────────────────────────
-
 async def cleanup_old_guest_sessions_loop() -> None:
     while True:
         try:
@@ -58,8 +46,8 @@ async def cleanup_old_guest_sessions_loop() -> None:
             log.error("Error in guest sessions cleanup loop: %s", e)
         await asyncio.sleep(24 * 3600)  # Sleep for 1 day
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(app):
     log.info("Starting GrabonGPT backend...")
     await postgres_db.init_db()
     asyncio.create_task(cleanup_old_guest_sessions_loop())
@@ -69,6 +57,17 @@ async def startup() -> None:
     conv.start_eviction_loop()
     cache.start_refresh_loop()
     log.info("GrabonGPT backend ready.")
+    yield
+
+app = FastAPI(title="GrabonGPT API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins     = config.CORS_ALLOWED_ORIGINS,
+    allow_credentials = True,
+    allow_methods     = ["*"],
+    allow_headers     = ["*"],
+)
 
 
 

@@ -242,14 +242,14 @@ export function Sidebar({
           <div className="flex flex-col gap-2 p-2.5 rounded-xl" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
-                style={{ background: "var(--brand)", color: "var(--brand-ink)" }}>
+                style={{ background: "var(--brand)", color: "var(--brand-ink)", fontFamily: "GothamRnd, sans-serif" }}>
                 {user?.name ? user.name[0].toUpperCase() : "U"}
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="text-[13px] font-bold truncate" style={{ color: "var(--text-1)" }}>
+                <span className="text-[13px] font-bold truncate" style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif" }}>
                   {user?.name || "User"}
                 </span>
-                <span className="text-[10px] truncate" style={{ color: "var(--text-3)" }}>
+                <span className="text-[10px] truncate" style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}>
                   {user?.email || ""}
                 </span>
               </div>
@@ -261,6 +261,7 @@ export function Sidebar({
                 background: "var(--red-10)",
                 color: "var(--red)",
                 borderColor: "transparent",
+                fontFamily: "GothamRnd, sans-serif",
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLElement).style.background = "var(--red)";
@@ -285,10 +286,10 @@ export function Sidebar({
                 </svg>
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="text-[13px] font-bold" style={{ color: "var(--text-1)" }}>
+                <span className="text-[13px] font-bold" style={{ color: "var(--text-1)", fontFamily: "GothamRnd, sans-serif" }}>
                   Guest Mode
                 </span>
-                <span className="text-[10px]" style={{ color: "var(--text-3)" }}>
+                <span className="text-[10px]" style={{ color: "var(--text-3)", fontFamily: "GothamRnd, sans-serif" }}>
                   4-message limit
                 </span>
               </div>
@@ -299,6 +300,7 @@ export function Sidebar({
               style={{
                 background: "var(--brand)",
                 color: "var(--brand-ink)",
+                fontFamily: "GothamRnd, sans-serif",
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLElement).style.background = "var(--brand-dark)";

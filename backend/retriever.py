@@ -276,6 +276,13 @@ _CROSS_SELL_STOPWORDS = frozenset({
     "today", "valid", "till", "price", "prices", "cashback", "more",
     "max", "minimum", "maximum", "worth", "value", "pay", "payment",
     "select", "selected", "products", "items", "purchase", "every",
+    # audience/marketing words — describe WHO the coupon targets, not WHAT product
+    "user", "users", "insider", "insiders", "existing", "member", "members",
+    "bank", "card", "cards", "wallet", "subscription", "plan", "plans",
+    "account", "first", "time", "special", "exclusive", "limited", "avail",
+    "collections", "collection", "favorites", "favourite", "favorites",
+    "bookings", "booking", "transactions", "transaction", "recharge",
+    "sitewide", "storewide", "everything", "assured", "range", "store",
 })
 
 def get_cross_sell_keywords(

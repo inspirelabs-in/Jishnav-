@@ -593,6 +593,7 @@ async def get_cross_sell_suggestions(
     available_keywords: list[str] | None = None,
     store_name: str | None = None,
     sibling_verticals: list[dict] | None = None,
+    shown_coupon_names: list[str] | None = None,
 ) -> dict | None:
     """
     Ask gpt-4o-mini to generate cross-sell suggestions with a short intro line.
@@ -608,25 +609,34 @@ async def get_cross_sell_suggestions(
         return None
 
     if available_keywords and store_name:
+        shown_part = ""
+        if shown_coupon_names:
+            shown_part = (
+                f"\nCoupons already shown to the user (do NOT suggest keywords that overlap with these):\n"
+                f"{json.dumps(shown_coupon_names[:5])}\n"
+            )
         prompt = (
             f"The user asked: \"{user_query}\"\n"
-            f"Store: {store_name}\n\n"
-            f"This store also has coupons mentioning these product keywords:\n"
+            f"Store: {store_name}\n"
+            f"{shown_part}\n"
+            f"This store also has coupons for these product categories:\n"
             f"{json.dumps(available_keywords)}\n\n"
-            f"Pick 2-3 keywords that represent genuinely different PRODUCT CATEGORIES "
-            f"the user might want to explore next on this same store.\n"
+            f"Pick 2-3 keywords that are SPECIFIC PRODUCT TYPES the user might want "
+            f"to explore next on this same store.\n"
             f"Rules:\n"
-            f"- Only pick real product/service names (shirts, laptops, flights, pizza, etc.)\n"
-            f"- NEVER pick noise words (rs, off, up, to, get, flat, code, upto, above, etc.)\n"
-            f"- NEVER pick generic discount words or store names\n"
-            f"- Each pick must be a different category from what the user already asked about\n"
-            f"- For each pick, write a short chip label (2-4 words) like "
-            f"\"Shoe deals\", \"Try laptops\", \"Pizza offers\"\n"
-            f"- Vary the label style: sometimes \"X deals\", sometimes \"Try X\", "
-            f"sometimes \"X offers\", sometimes just the category name\n"
-            f"- Also write a short intro line (under 10 words) above the chips. "
-            f"Vary it every time: \"Also on {store_name}:\", \"More from {store_name}\", "
-            f"\"You might also like\", \"Explore more deals\", etc. Never repeat the same intro."
+            f"- Only pick tangible product/service names: shirts, laptops, shoes, pizza, "
+            f"flights, groceries, skincare, watches, etc.\n"
+            f"- NEVER pick audience words (user, insider, member, existing, new)\n"
+            f"- NEVER pick marketing words (collection, favorites, special, exclusive, sitewide)\n"
+            f"- NEVER pick discount/payment words (cashback, bank, card, wallet, off, flat)\n"
+            f"- NEVER pick the store name itself or what the user already searched for\n"
+            f"- Each keyword must find DIFFERENT coupons than what the user already sees\n"
+            f"- For each pick, write a catchy chip label (2-4 words). Vary the style:\n"
+            f"  \"Shoe deals\", \"Try laptops\", \"Pizza offers\", \"Kurta savings\"\n"
+            f"- Write a short, unique intro line (under 10 words) above the chips. "
+            f"NEVER repeat the same line. Examples: \"Also on {store_name}:\", "
+            f"\"More from {store_name}\", \"You might also like\", \"Explore more deals\", "
+            f"\"While you're here:\", \"Don't miss these:\""
         )
     else:
         vert_names = [v["name"] for v in (sibling_verticals or [])]

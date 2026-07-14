@@ -1199,12 +1199,18 @@ async def chat(req: ChatRequest, request: Request):
                         log.info("Cross-sell keywords: %s", _cs_raw_keywords)
                         if _cs_raw_keywords:
                             _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
+                            _cs_shown_names = [
+                                (c.get("CouponName") or "").strip()
+                                for c in coupons[:_quota]
+                                if (c.get("CouponName") or "").strip()
+                            ]
 
                             async def _fetch_store_cs():
                                 r = await responder.get_cross_sell_suggestions(
                                     user_query=route.corrected_query or message,
                                     available_keywords=_cs_raw_keywords,
                                     store_name=_cs_store,
+                                    shown_coupon_names=_cs_shown_names,
                                 )
                                 if r:
                                     for s in r["suggestions"]:

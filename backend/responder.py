@@ -588,140 +588,88 @@ async def stream_coupon_response(
     yield {"type": "coupons", "data": _serialise_coupons(coupons)}
 
 
-async def get_cross_sell_suggestions(
+async def generate_cross_sell_line(
     user_query: str,
     available_keywords: list[str] | None = None,
     store_name: str | None = None,
     sibling_verticals: list[dict] | None = None,
-    shown_coupon_names: list[str] | None = None,
-) -> dict | None:
+) -> str | None:
     """
-    Ask gpt-4o-mini to generate cross-sell suggestions with a short intro line.
+    Generate a single dynamic, engaging text line suggesting what else the user
+    can explore. Returns a plain string or None on failure.
 
     Two modes:
-    - Store mode: pick 2-3 product keywords from available_keywords for same store.
-    - Vertical mode: pick 2-3 sibling verticals the user might also want.
+    - Store mode: mentions 2-3 product categories available on the same store.
+    - Vertical mode: mentions 2-3 sibling category names with active coupons.
 
-    Returns {"intro": "Also on Myntra:", "suggestions": [{"keyword": ..., "label": ...}, ...]}
-    or None on failure.
+    The LLM is told which keywords/categories actually have coupons, so it only
+    mentions verified options. Every call produces a unique, varied sentence.
     """
     if not available_keywords and not sibling_verticals:
         return None
 
     if available_keywords and store_name:
-        shown_part = ""
-        if shown_coupon_names:
-            shown_part = (
-                f"\nCoupons already shown to the user (do NOT suggest keywords that overlap with these):\n"
-                f"{json.dumps(shown_coupon_names[:5])}\n"
-            )
         prompt = (
-            f"The user asked: \"{user_query}\"\n"
-            f"Store: {store_name}\n"
-            f"{shown_part}\n"
-            f"This store also has coupons for these product categories:\n"
+            f"The user searched for: \"{user_query}\" on {store_name}.\n"
+            f"This store also has active coupons for these product categories:\n"
             f"{json.dumps(available_keywords)}\n\n"
-            f"Pick 2-3 keywords that are SPECIFIC PRODUCT TYPES the user might want "
-            f"to explore next on this same store.\n"
+            f"Write ONE short, engaging sentence (under 25 words) telling the user "
+            f"about 2-3 of these other categories they might like.\n"
             f"Rules:\n"
-            f"- Only pick tangible product/service names: shirts, laptops, shoes, pizza, "
-            f"flights, groceries, skincare, watches, etc.\n"
-            f"- NEVER pick audience words (user, insider, member, existing, new)\n"
-            f"- NEVER pick marketing words (collection, favorites, special, exclusive, sitewide)\n"
-            f"- NEVER pick discount/payment words (cashback, bank, card, wallet, off, flat)\n"
-            f"- NEVER pick the store name itself or what the user already searched for\n"
-            f"- Each keyword must find DIFFERENT coupons than what the user already sees\n"
-            f"- For each pick, write a catchy chip label (2-4 words). Vary the style:\n"
-            f"  \"Shoe deals\", \"Try laptops\", \"Pizza offers\", \"Kurta savings\"\n"
-            f"- Write a short, unique intro line (under 10 words) above the chips. "
-            f"NEVER repeat the same line. Examples: \"Also on {store_name}:\", "
-            f"\"More from {store_name}\", \"You might also like\", \"Explore more deals\", "
-            f"\"While you're here:\", \"Don't miss these:\""
+            f"- Pick only tangible product/service names from the list above\n"
+            f"- NEVER pick what the user already searched for\n"
+            f"- Make it conversational and warm, like a friend mentioning it casually\n"
+            f"- NEVER start with 'Also' or 'Additionally' every time — vary your opener wildly:\n"
+            f"  sometimes a question ('Looking for shoes too?'), sometimes a nudge\n"
+            f"  ('Psst, there are great kurta deals here too'), sometimes direct\n"
+            f"  ('Don't miss the laptop and watch offers on {store_name}'), sometimes\n"
+            f"  playful ('While you are here, {store_name} also has killer pizza and\n"
+            f"  burger deals')\n"
+            f"- Never use the exact same phrasing twice across calls\n"
+            f"- No em dashes. No exclamation marks at the end. Keep it natural\n"
+            f"- Output ONLY the single sentence, nothing else"
         )
     else:
         vert_names = [v["name"] for v in (sibling_verticals or [])]
         prompt = (
-            f"The user asked: \"{user_query}\"\n\n"
-            f"These related categories also have active coupons:\n"
+            f"The user searched for: \"{user_query}\".\n"
+            f"These related categories also have active coupon codes:\n"
             f"{json.dumps(vert_names)}\n\n"
-            f"Pick 2-3 categories the user might also want to explore.\n"
-            f"For each, write a short chip label (2-4 words) like "
-            f"\"Flight deals\", \"Try cab rides\", \"Hotel offers\"\n"
-            f"- Vary the label style each time\n"
-            f"- The keyword should be the exact category name from the list\n"
-            f"- Also write a short intro line (under 10 words) above the chips. "
-            f"Vary it every time: \"Related categories\", \"You might also need\", "
-            f"\"Explore more\", \"Also available\", etc. Never repeat the same intro."
+            f"Write ONE short, engaging sentence (under 25 words) mentioning 2-3 "
+            f"of these categories the user might also want to check.\n"
+            f"Rules:\n"
+            f"- Vary your style wildly each time — question, nudge, casual mention,\n"
+            f"  playful hint. Never use the same opener or structure twice\n"
+            f"- Examples of variety:\n"
+            f"  'We also have some great cab and hotel deals if you need those'\n"
+            f"  'Need flight or bus tickets too? We have codes for those as well'\n"
+            f"  'By the way, there are sweet recharge and food delivery offers available'\n"
+            f"- No em dashes. No exclamation marks at the end. Keep it natural\n"
+            f"- Output ONLY the single sentence, nothing else"
         )
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "intro": {"type": "string"},
-            "suggestions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "keyword": {"type": "string"},
-                        "label": {"type": "string"},
-                    },
-                    "required": ["keyword", "label"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": ["intro", "suggestions"],
-        "additionalProperties": False,
-    }
 
     try:
         client = _get_openai()
         resp = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "cross_sell_suggestions", "strict": True, "schema": schema},
-            },
-            temperature=0.7,
-            max_tokens=200,
+            temperature=0.9,
+            max_tokens=60,
         )
         llm_logger.log_call(
             model         = "gpt-4o-mini",
-            prompt_file   = "inline: cross_sell_suggestions",
-            function_name = "get_cross_sell_suggestions",
+            prompt_file   = "inline: cross_sell_line",
+            function_name = "generate_cross_sell_line",
             input_tokens  = resp.usage.prompt_tokens     or 0,
             output_tokens = resp.usage.completion_tokens or 0,
         )
-        raw = resp.choices[0].message.content or ""
-        parsed = json.loads(raw)
-        suggestions = parsed.get("suggestions", [])
-        intro = (parsed.get("intro") or "").strip()
-        if not suggestions:
+        line = (resp.choices[0].message.content or "").strip()
+        line = line.strip('"').strip("'").strip()
+        if not line or len(line) < 10:
             return None
-        _avail_lower = [k.lower() for k in available_keywords] if available_keywords else None
-
-        def _keyword_valid(kw: str) -> bool:
-            if _avail_lower is None:
-                return True
-            kw_l = kw.lower()
-            for ak in _avail_lower:
-                if kw_l == ak or kw_l in ak or ak in kw_l:
-                    return True
-            return False
-
-        clean = [
-            {"keyword": s["keyword"].strip(), "label": s["label"].strip()}
-            for s in suggestions
-            if s.get("keyword", "").strip() and s.get("label", "").strip()
-            and _keyword_valid(s["keyword"].strip())
-        ][:3]
-        if not clean:
-            return None
-        return {"intro": intro, "suggestions": clean}
+        return line
     except Exception as e:
-        log.warning("Cross-sell suggestion LLM call failed: %s", e)
+        log.warning("Cross-sell line LLM call failed: %s", e)
         return None
 
 

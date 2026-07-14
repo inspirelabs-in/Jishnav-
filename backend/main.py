@@ -113,10 +113,6 @@ def _sse_error(msg: str) -> str:
     return _sse("error", json.dumps({"message": msg}))
 
 
-def _sse_cross_sell(data: dict) -> str:
-    return _sse("cross_sell", json.dumps(data))
-
-
 def _sse_done() -> str:
     return _sse("done", "{}")
 
@@ -1199,42 +1195,23 @@ async def chat(req: ChatRequest, request: Request):
                         log.info("Cross-sell keywords: %s", _cs_raw_keywords)
                         if _cs_raw_keywords:
                             _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
-                            _cs_shown_names = [
-                                (c.get("CouponName") or "").strip()
-                                for c in coupons[:_quota]
-                                if (c.get("CouponName") or "").strip()
-                            ]
-
-                            async def _fetch_store_cs():
-                                r = await responder.get_cross_sell_suggestions(
+                            _cs_task = asyncio.create_task(
+                                responder.generate_cross_sell_line(
                                     user_query=route.corrected_query or message,
                                     available_keywords=_cs_raw_keywords,
                                     store_name=_cs_store,
-                                    shown_coupon_names=_cs_shown_names,
                                 )
-                                if r:
-                                    for s in r["suggestions"]:
-                                        s["store_id"] = route.store_ids[0]
-                                        s["store_name"] = _cs_store
-                                return r
-
-                            _cs_task = asyncio.create_task(_fetch_store_cs())
+                            )
 
                 elif route.vertical_ids and not route.store_ids:
                     _siblings = vertical_classifier.get_sibling_verticals(route.vertical_ids)
                     if _siblings:
-                        async def _fetch_vert_cs():
-                            r = await responder.get_cross_sell_suggestions(
+                        _cs_task = asyncio.create_task(
+                            responder.generate_cross_sell_line(
                                 user_query=route.corrected_query or message,
                                 sibling_verticals=_siblings,
                             )
-                            if r:
-                                for s in r["suggestions"]:
-                                    s["store_id"] = 0
-                                    s["store_name"] = ""
-                            return r
-
-                        _cs_task = asyncio.create_task(_fetch_vert_cs())
+                        )
 
             _sent_coupons = []
             async for chunk in responder.stream_coupon_response(
@@ -1271,9 +1248,11 @@ async def chat(req: ChatRequest, request: Request):
             # Await the cross-sell result (already running in parallel)
             if _cs_task:
                 try:
-                    _cs_result = await _cs_task
-                    if _cs_result:
-                        yield _sse_cross_sell(_cs_result)
+                    _cs_line = await _cs_task
+                    if _cs_line:
+                        _cs_text = f"\n\n{_cs_line}"
+                        yield _sse_text(_cs_text)
+                        full_text += _cs_text
                 except Exception as e:
                     log.warning("Cross-sell task failed: %s", e)
 

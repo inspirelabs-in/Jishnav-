@@ -640,12 +640,22 @@ async def get_cross_sell_suggestions(
         intro = (parsed.get("intro") or "").strip()
         if not suggestions:
             return None
-        _avail_lower = {k.lower() for k in available_keywords} if available_keywords else None
+        _avail_lower = [k.lower() for k in available_keywords] if available_keywords else None
+
+        def _keyword_valid(kw: str) -> bool:
+            if _avail_lower is None:
+                return True
+            kw_l = kw.lower()
+            for ak in _avail_lower:
+                if kw_l == ak or kw_l in ak or ak in kw_l:
+                    return True
+            return False
+
         clean = [
             {"keyword": s["keyword"].strip(), "label": s["label"].strip()}
             for s in suggestions
             if s.get("keyword", "").strip() and s.get("label", "").strip()
-            and (_avail_lower is None or s["keyword"].strip().lower() in _avail_lower)
+            and _keyword_valid(s["keyword"].strip())
         ][:3]
         if not clean:
             return None

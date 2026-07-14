@@ -254,6 +254,20 @@ async def get_coupons_dual_path(
     return all_coupons[:limit]
 
 
+_CROSS_SELL_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "this", "that", "your", "you",
+    "all", "any", "are", "can", "has", "have", "was", "were", "its", "our",
+    "on", "in", "at", "to", "of", "by", "an", "or", "is", "it", "no", "not",
+    "get", "up", "off", "rs", "upto", "flat", "above", "below", "min",
+    "use", "using", "via", "per", "also", "only", "just", "now", "new",
+    "code", "codes", "coupon", "coupons", "offer", "offers", "deal", "deals",
+    "discount", "discounts", "promo", "save", "savings", "extra", "best",
+    "top", "free", "buy", "order", "orders", "online", "app", "site",
+    "today", "valid", "till", "price", "prices", "cashback", "more",
+    "max", "minimum", "maximum", "worth", "value", "pay", "payment",
+    "select", "selected", "products", "items", "purchase", "every",
+})
+
 def get_cross_sell_keywords(
     store_id: int,
     user_query: str,
@@ -283,6 +297,10 @@ def get_cross_sell_keywords(
         if kw in query_words:
             continue
         if kw.isdigit():
+            continue
+        if kw in _CROSS_SELL_STOPWORDS:
+            continue
+        if len(kw) < 3:
             continue
         if count > total_coupons * 0.8:
             continue

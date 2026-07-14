@@ -1170,8 +1170,9 @@ async def chat(req: ChatRequest, request: Request):
             if coupons and not _widened_from_store and not pending:
                 if route.store_ids and len(route.store_ids) == 1:
                     _cs_coupon_count = len(cache.get_coupons_for_merchant(route.store_ids[0]))
+                    log.info("Cross-sell gate: store_id=%s coupon_count=%d", route.store_ids[0], _cs_coupon_count)
                     if _cs_coupon_count < 6:
-                        pass  # skip cross-sell for stores with fewer than 6 distinct coupons
+                        log.info("Cross-sell skipped: store has fewer than 6 coupons")
                     else:
                         _cs_family = set()
                         for _vid in (route.vertical_ids or []):
@@ -1181,6 +1182,7 @@ async def chat(req: ChatRequest, request: Request):
                             user_query=route.corrected_query or message,
                             vertical_family=_cs_family,
                         )
+                        log.info("Cross-sell keywords: %s", _cs_raw_keywords)
                         if _cs_raw_keywords:
                             _cs_store = cache.get_store_name(route.store_ids[0]) or "this store"
 

@@ -454,54 +454,6 @@ textarea { field-sizing: content; }
 }
 .reveal-btn:active { transform: scale(0.95); }
 
-/* Code button — sealed state */
-.code-btn {
-  transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1),
-              box-shadow 180ms var(--ease-out),
-              filter 180ms var(--ease-out);
-}
-@media (hover: hover) and (pointer: fine) {
-  .code-btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 14px rgba(132, 204, 22, 0.3);
-    filter: brightness(1.05);
-  }
-}
-.code-btn:active {
-  transform: scale(0.97);
-  transition-duration: 80ms;
-}
-
-/* Code revealed state */
-.code-revealed {
-  animation: codeReveal 350ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-@keyframes codeReveal {
-  from {
-    opacity: 0;
-    transform: scale(0.92);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Copy button inside revealed code */
-.code-copy-btn {
-  transition: transform 150ms cubic-bezier(0.34, 1.56, 0.64, 1),
-              background 250ms ease;
-}
-@media (hover: hover) and (pointer: fine) {
-  .code-copy-btn:hover {
-    filter: brightness(1.1);
-  }
-}
-.code-copy-btn:active {
-  transform: scale(0.9);
-  transition-duration: 80ms;
-}
-
 /* Deal panel header */
 .deal-panel-header {
   background: linear-gradient(135deg, var(--brand-10) 0%, transparent 100%);

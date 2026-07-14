@@ -286,85 +286,67 @@ function DealTicket({ coupon, isDark, index }: { coupon: Coupon; isDark: boolean
               Visit Deal
             </a>
           ) : (
-            <div className="relative w-full h-[38px] flex items-center overflow-hidden"
-              style={{ borderRadius: 10 }}>
+            /* Overlapping Button + Code combo */
+            <div
+              className="relative w-full h-[36px] flex items-center rounded-lg border border-dashed overflow-hidden"
+              style={{
+                borderColor: reveal === "revealed" ? "var(--brand-dark)" : "var(--border)",
+                background: reveal === "revealed" ? "var(--brand-10)" : "var(--surface-2)",
+              }}>
 
-              {/* Sealed state: full-width button */}
-              {reveal !== "revealed" && (
+              {/* Coupon Code — always rendered in background, right-aligned */}
+              <div
+                className="absolute inset-0 flex items-center justify-end pr-3 font-mono font-bold text-[12px] tracking-[0.06em] select-none"
+                style={{
+                  color: "var(--brand-dark)",
+                  pointerEvents: "none",
+                }}>
+                {coupon.couponCode.toUpperCase()}
+              </div>
+
+              {/* COPY CODE button — overlaps the code from the left */}
+              {reveal !== "revealed" ? (
                 <button
                   onClick={(e) => handleReveal(e)}
-                  className="code-btn w-full h-full flex items-center justify-center gap-1.5 z-10"
+                  className="absolute left-0 top-0 h-full font-bold text-[10px] uppercase tracking-wider pressable rounded-lg z-10"
                   style={{
-                    background: "var(--brand)",
+                    width: "calc(100% - 40px)",
+                    background: "linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%)",
                     color: "var(--brand-ink)",
                     fontFamily: "GothamRnd, sans-serif",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    letterSpacing: "0.03em",
-                    border: "none",
-                    borderRadius: 10,
+                    boxShadow: "2px 0 6px rgba(0, 0, 0, 0.12)",
+                    transition: "width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease",
                     cursor: "pointer",
-                    position: "relative",
-                    overflow: "hidden",
                   }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.85 }}>
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>
-                  Get Code
+                  Copy Code
                 </button>
-              )}
-
-              {/* Revealed state: code display with copy button */}
-              {reveal === "revealed" && (
-                <div className="code-revealed w-full h-full flex items-center"
+              ) : (
+                /* After reveal: show copy icon button on the left */
+                <button
+                  onClick={(e) => handleCopy(e)}
+                  className="absolute left-1 top-1/2 -translate-y-1/2 flex items-center justify-center rounded-full z-10 pressable"
+                  title="Copy code"
                   style={{
-                    background: "var(--surface-2)",
-                    borderRadius: 10,
-                    border: "1.5px dashed var(--brand)",
-                    overflow: "hidden",
+                    width: "28px",
+                    height: "28px",
+                    background: copied
+                      ? "linear-gradient(135deg, #16A34A 0%, #15803d 100%)"
+                      : "linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%)",
+                    color: copied ? "#ffffff" : "var(--brand-ink)",
+                    transition: "background 0.2s ease",
+                    cursor: "pointer",
                   }}>
-                  <div className="flex-1 flex items-center justify-center min-w-0 px-2"
-                    style={{ overflow: "hidden" }}>
-                    <span style={{
-                      fontFamily: "'SF Mono', 'Fira Code', 'Consolas', monospace",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: "0.08em",
-                      color: "var(--brand-dark)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}>
-                      {coupon.couponCode.toUpperCase()}
-                    </span>
-                  </div>
-                  <button
-                    onClick={(e) => handleCopy(e)}
-                    className="code-copy-btn shrink-0 flex items-center justify-center"
-                    title={copied ? "Copied!" : "Copy code"}
-                    style={{
-                      width: 36,
-                      height: "100%",
-                      background: copied ? "#16a34a" : "var(--brand)",
-                      color: copied ? "#fff" : "var(--brand-ink)",
-                      border: "none",
-                      borderRadius: "0 8px 8px 0",
-                      cursor: "pointer",
-                      transition: "background 0.25s ease",
-                    }}>
-                    {copied ? (
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    ) : (
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
+                  {copied ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
+                </button>
               )}
             </div>
           )}

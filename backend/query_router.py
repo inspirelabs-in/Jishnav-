@@ -84,6 +84,24 @@ async def route(message: str, session_id: str) -> RouteResult:
         r.pending_offer  = pending
         return r
 
+    # ── "All" / "everything" after a narrowing question ─────────────────────
+    # When the assistant asked "flight, hotel, or bus?" and the user replies
+    # "all", "everything", "both", "show me all", etc., fetch ALL saved verticals
+    # instead of re-asking the clarification.
+    _ALL_WORDS = {"all", "everything", "both", "all of them", "all three",
+                  "show me all", "show all", "yes all", "all of it", "every",
+                  "all of those", "all the above", "all above", "sab", "sabhi"}
+    if (last_asst and last_asst.was_narrowing
+            and last_asst.matched_vertical_ids
+            and message.strip().lower().rstrip("!.") in _ALL_WORDS):
+        r.query_type   = "B"
+        r.vertical_ids = last_asst.matched_vertical_ids
+        r.store_ids    = last_asst.store_ids or []
+        if last_asst.min_discount:
+            r.min_discount = last_asst.min_discount
+        log.info("User said 'all' after narrowing — fetching all saved verticals: %s", r.vertical_ids)
+        return r
+
     # ── Map LLM intent to route flags ─────────────────────────────────────────
 
     if result.intent == "system_info":

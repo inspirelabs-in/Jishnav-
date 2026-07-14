@@ -209,6 +209,8 @@ def serialise_coupon(c: dict) -> dict:
         else:
             end_date = str(end_date)
 
+    favicon_url = c.get("faviconUrl") if "faviconUrl" in c else c.get("FaviconUrl", "")
+
     return {
         "couponId":         coupon_id,
         "storeName":        store_name,
@@ -228,6 +230,7 @@ def serialise_coupon(c: dict) -> dict:
         "validityLabel":    validity_label,
         "validityUrgency":  validity_urgency,
         "endDate":          end_date,
+        "faviconUrl":       favicon_url or "",
     }
 
 

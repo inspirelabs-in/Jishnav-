@@ -347,6 +347,7 @@ async def chat(req: ChatRequest, request: Request):
                         log.info("is_explicit_web LIKE after LLM filter: %d kept", len(_verified))
                         if _verified:
                             full_text = ""
+                            _sent_coupons = []
                             async for chunk in responder.stream_coupon_response(
                                 user_message = message,
                                 session_id   = session_id,
@@ -358,12 +359,13 @@ async def chat(req: ChatRequest, request: Request):
                                     yield _sse_text(chunk)
                                     full_text += chunk
                                 else:
-                                    yield _sse_coupons(chunk["data"])
+                                    _sent_coupons = chunk["data"]
+                                    yield _sse_coupons(_sent_coupons)
                             await conv.add_message(session_id, conv.Message(role="user", content=message))
                             await conv.add_message(session_id, conv.Message(
                                 role="assistant", content=full_text,
-                                coupon_count=len(_verified),
-                                coupons=_verified,
+                                coupon_count=len(_sent_coupons),
+                                coupons=_sent_coupons,
                             ))
                             yield _sse_done()
                             return
@@ -472,6 +474,7 @@ async def chat(req: ChatRequest, request: Request):
                     label = fb_store_name or "these"
                     reframed = f"Show me the best active {label} coupons"
                     full_text = ""
+                    _sent_coupons = []
                     async for chunk in responder.stream_coupon_response(
                         user_message = reframed,
                         session_id   = session_id,
@@ -483,15 +486,16 @@ async def chat(req: ChatRequest, request: Request):
                             yield _sse_text(chunk)
                             full_text += chunk
                         else:
-                            yield _sse_coupons(chunk["data"])
+                            _sent_coupons = chunk["data"]
+                            yield _sse_coupons(_sent_coupons)
 
                     await conv.add_message(session_id, conv.Message(role="user", content=message))
                     await conv.add_message(session_id, conv.Message(
                         role="assistant", content=full_text,
                         matched_vertical_ids=fb_vids,
                         store_ids=fb_sids,
-                        coupon_count=len(coupons),
-                        coupons=coupons,
+                        coupon_count=len(_sent_coupons),
+                        coupons=_sent_coupons,
                     ))
                     yield _sse_done()
                     return
@@ -516,6 +520,7 @@ async def chat(req: ChatRequest, request: Request):
                     return
 
                 full_text = ""
+                _sent_coupons = []
                 async for chunk in responder.stream_coupon_response(
                     user_message = message,
                     session_id   = session_id,
@@ -526,15 +531,16 @@ async def chat(req: ChatRequest, request: Request):
                         yield _sse_text(chunk)
                         full_text += chunk
                     else:
-                        yield _sse_coupons(chunk["data"])
+                        _sent_coupons = chunk["data"]
+                        yield _sse_coupons(_sent_coupons)
 
                 await conv.add_message(session_id, conv.Message(role="user", content=message))
                 await conv.add_message(session_id, conv.Message(
                     role="assistant", content=full_text,
                     matched_vertical_ids=route.vertical_ids,
                     store_ids=route.store_ids,
-                    coupon_count=len(coupons),
-                    coupons=coupons,
+                    coupon_count=len(_sent_coupons),
+                    coupons=_sent_coupons,
                 ))
                 yield _sse_done()
                 return
@@ -619,6 +625,7 @@ async def chat(req: ChatRequest, request: Request):
                 full_text = ""
                 pending   = ""
 
+                _sent_loc_coupons = []
                 if loc_coupons and not no_specific_vids:
                     # All verticals returned specific results — normal LLM response
                     async for chunk in responder.stream_coupon_response(
@@ -632,7 +639,8 @@ async def chat(req: ChatRequest, request: Request):
                             yield _sse_text(chunk)
                             full_text += chunk
                         else:
-                            yield _sse_coupons(chunk["data"])
+                            _sent_loc_coupons = chunk["data"]
+                            yield _sse_coupons(_sent_loc_coupons)
 
                 elif loc_coupons and no_specific_vids:
                     # Some verticals found, some didn't.
@@ -673,9 +681,9 @@ async def chat(req: ChatRequest, request: Request):
                 await conv.add_message(session_id, conv.Message(
                     role="assistant", content=full_text,
                     matched_vertical_ids=route.vertical_ids,
-                    coupon_count=len(loc_coupons),
+                    coupon_count=len(loc_coupons) if no_specific_vids else len(_sent_loc_coupons),
                     pending_offer=pending,
-                    coupons=responder.serialise_coupons(loc_coupons) if no_specific_vids else loc_coupons,
+                    coupons=responder.serialise_coupons(loc_coupons) if no_specific_vids else _sent_loc_coupons,
                 ))
                 yield _sse_done()
                 return
@@ -1030,6 +1038,7 @@ async def chat(req: ChatRequest, request: Request):
                     )
                     yield _sse_text(fallback_msg + "\n\n")
                     full_text = fallback_msg + "\n\n"
+                    _sent_coupons = []
                     async for chunk in responder.stream_coupon_response(
                         user_message = message,
                         session_id   = session_id,
@@ -1041,13 +1050,14 @@ async def chat(req: ChatRequest, request: Request):
                             yield _sse_text(chunk)
                             full_text += chunk
                         else:
-                            yield _sse_coupons(chunk["data"])
+                            _sent_coupons = chunk["data"]
+                            yield _sse_coupons(_sent_coupons)
                     await conv.add_message(session_id, conv.Message(role="user", content=message))
                     await conv.add_message(session_id, conv.Message(
                         role="assistant", content=full_text,
                         store_ids=route.store_ids,
-                        coupon_count=len(fallback_coupons),
-                        coupons=fallback_coupons,
+                        coupon_count=len(_sent_coupons),
+                        coupons=_sent_coupons,
                     ))
                     yield _sse_done()
                     return
@@ -1204,6 +1214,7 @@ async def chat(req: ChatRequest, request: Request):
 
                         _cs_task = asyncio.create_task(_fetch_vert_cs())
 
+            _sent_coupons = []
             async for chunk in responder.stream_coupon_response(
                 user_message     = message,
                 session_id       = session_id,
@@ -1217,7 +1228,8 @@ async def chat(req: ChatRequest, request: Request):
                     yield _sse_text(chunk)
                     full_text += chunk
                 else:
-                    yield _sse_coupons(chunk["data"])
+                    _sent_coupons = chunk["data"]
+                    yield _sse_coupons(_sent_coupons)
 
             # Tell user which requested categories had no results
             if _empty_vids:
@@ -1248,9 +1260,9 @@ async def chat(req: ChatRequest, request: Request):
                 role="assistant", content=full_text,
                 matched_vertical_ids=route.vertical_ids,
                 store_ids=route.store_ids or [s[0] for s in stores_searched],
-                coupon_count=len(coupons),
+                coupon_count=len(_sent_coupons),
                 pending_offer=pending,
-                coupons=coupons,
+                coupons=_sent_coupons,
             ))
             yield _sse_done()
 

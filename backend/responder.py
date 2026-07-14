@@ -160,6 +160,56 @@ async def stream_unavailable_response(
     )
 
 
+async def stream_brand_unavailable_response(
+    user_message: str,
+    session_id: str,
+    brand: str,
+    category: str,
+) -> AsyncIterator[str]:
+    """
+    LLM-generated response when a specific brand isn't available but we can
+    offer general category coupons instead. Varied, warm, conversational.
+    """
+    cat_label = category if category else "general"
+    prompt = (
+        f"The user asked for \"{brand}\" coupons, but GrabOn doesn't have "
+        f"{brand} codes right now. However, we DO have {cat_label} coupon codes "
+        f"from other brands.\n\n"
+        f"Write a warm, natural reply that:\n"
+        f"1. Acknowledges what they asked for ({brand}) so they know you understood\n"
+        f"2. Says we don't have {brand} codes right now\n"
+        f"3. Asks if they'd like to see {cat_label} coupons from other brands instead\n\n"
+        f"Vary your phrasing EVERY TIME — never use the same opener or structure. "
+        f"Mix it up: sometimes start with empathy (\"Ah, tough luck...\"), sometimes "
+        f"with the fact (\"No {brand} codes at the moment...\"), sometimes with the "
+        f"offer (\"I couldn't find {brand}, but...\"). Be casual and human.\n\n"
+        f"Max 2 sentences, under 40 words. No em dashes. No exclamation marks. "
+        f"No corporate phrasing."
+    )
+    history = await conv.get_history(session_id)
+    messages = _history_to_messages(history)
+    messages.append({"role": "user", "content": prompt})
+
+    llm = get_llm()
+    full_text = ""
+    async for chunk in llm.generate(
+        system_prompt="You are GrabonGPT, a friendly coupon assistant for GrabOn.in.",
+        messages=messages,
+        temperature=0.8,
+        max_tokens=80,
+    ):
+        yield chunk
+        full_text += chunk
+    llm_logger.log_call(
+        model         = llm.model,
+        prompt_file   = "inline: brand_unavailable_response",
+        function_name = "stream_brand_unavailable_response",
+        input_tokens  = llm.last_usage.get("input_tokens", 0),
+        output_tokens = llm.last_usage.get("output_tokens", 0),
+        session_id    = session_id,
+    )
+
+
 _openai_client: AsyncOpenAI | None = None
 
 

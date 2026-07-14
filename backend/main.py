@@ -838,15 +838,20 @@ async def chat(req: ChatRequest, request: Request):
                 # "Omen 16-ap0181ax" (via "omen") instead of looking for "hp omen" as
                 # a combined substring which never appears in either field.
                 _bh_tokens = [t for t in route.brand_name_hint.lower().split() if t]
-                _brand_matches = [
-                    c for c in coupons
-                    if any(
-                        tok in (c.get("StoreName") or "").lower()
-                        or tok in (c.get("CouponName") or "").lower()
-                        for tok in _bh_tokens
-                    )
-                ]
-                if _brand_matches and len(_brand_matches) > 1:
+
+                def _coupon_matches_tokens(c: dict, tokens: list[str], require_all: bool) -> bool:
+                    sn = (c.get("StoreName") or "").lower()
+                    cn = (c.get("CouponName") or "").lower()
+                    check = all if require_all else any
+                    return check(tok in sn or tok in cn for tok in tokens)
+
+                _brand_matches = []
+                if len(_bh_tokens) > 1:
+                    _brand_matches = [c for c in coupons if _coupon_matches_tokens(c, _bh_tokens, require_all=True)]
+                if not _brand_matches:
+                    _brand_matches = [c for c in coupons if _coupon_matches_tokens(c, _bh_tokens, require_all=False)]
+
+                if _brand_matches:
                     _verified = await responder.filter_brand_coupons(
                         route.brand_name_hint, _brand_matches
                     )
@@ -878,14 +883,19 @@ async def chat(req: ChatRequest, request: Request):
                         category = _infer_category(message, route)
                         category_lower = category.lower() if category else "general"
                         category_part = f" {category_lower}" if category_lower != "general" else ""
-                        msg = f"The brand you asked for ({route.brand_name_hint}) is currently not available. Would you like to see general{category_part} coupon codes?"
-                        yield _sse_text(msg)
-                        
+
+                        full_text = ""
+                        async for chunk in responder.stream_brand_unavailable_response(
+                            message, session_id, route.brand_name_hint, category_part.strip(),
+                        ):
+                            yield _sse_text(chunk)
+                            full_text += chunk
+
                         pending = f"general_fallback:{','.join(str(v) for v in route.vertical_ids)}"
-                        
+
                         await conv.add_message(session_id, conv.Message(role="user", content=message))
                         await conv.add_message(session_id, conv.Message(
-                            role="assistant", content=msg,
+                            role="assistant", content=full_text,
                             pending_offer=pending,
                             store_ids=route.store_ids,
                             matched_vertical_ids=route.vertical_ids,
@@ -927,14 +937,19 @@ async def chat(req: ChatRequest, request: Request):
                             category = _infer_category(message, route)
                             category_lower = category.lower() if category else "general"
                             category_part = f" {category_lower}" if category_lower != "general" else ""
-                            msg = f"The brand you asked for ({route.brand_name_hint}) is currently not available. Would you like to see general{category_part} coupon codes?"
-                            yield _sse_text(msg)
-                            
+
+                            full_text = ""
+                            async for chunk in responder.stream_brand_unavailable_response(
+                                message, session_id, route.brand_name_hint, category_part.strip(),
+                            ):
+                                yield _sse_text(chunk)
+                                full_text += chunk
+
                             pending = f"general_fallback:{','.join(str(v) for v in route.vertical_ids)}"
-                            
+
                             await conv.add_message(session_id, conv.Message(role="user", content=message))
                             await conv.add_message(session_id, conv.Message(
-                                role="assistant", content=msg,
+                                role="assistant", content=full_text,
                                 pending_offer=pending,
                                 store_ids=route.store_ids,
                                 matched_vertical_ids=route.vertical_ids,

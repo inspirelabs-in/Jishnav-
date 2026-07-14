@@ -188,7 +188,7 @@ function DealTicket({ coupon, isDark, index }: { coupon: Coupon; isDark: boolean
                 <img
                   src={coupon.faviconUrl}
                   alt=""
-                  className="w-5 h-5 rounded object-contain shrink-0"
+                  className="w-7 h-7 rounded-lg object-contain shrink-0"
                   onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                 />
               )}

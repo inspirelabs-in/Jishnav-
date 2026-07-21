@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+backend/.venv/
+backend/venv/
+backend/*.db
+*.db
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+
+# Claude Code
+.claude/

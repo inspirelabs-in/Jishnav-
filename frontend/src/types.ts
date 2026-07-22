@@ -98,7 +98,6 @@ export interface Notification {
   id: number;
   merchant_id: number;
   merchant_name: string;
-  user: string;
   handler: string;
   message: string;
   period_label: string;
@@ -112,6 +111,16 @@ export interface Notification {
 export interface EditLog {
   id: number;
   entry_id: number;
+  merchant_id: number;
+  merchant_name: string;
+  edited_by: string;
+  edited_at: string;
+  changes: Record<string, { old: unknown; new: unknown }>;
+}
+
+/** Change to a merchant's own fields (category, reporting, payout, …). */
+export interface MerchantEditLog {
+  id: number;
   merchant_id: number;
   merchant_name: string;
   edited_by: string;
@@ -208,7 +217,18 @@ export const HANDLERS = ["Swati", "Yamini", "Meena"];
 export const MANAGER = "Manager";
 export const FOUNDERS = "Founders Office";
 export const DELIVERY = "Delivery";
-export const USERS = [...HANDLERS, MANAGER, FOUNDERS, DELIVERY];
+export const SALES_TEAM = ["Sales1", "Sales2"];
+export const USERS = [...HANDLERS, MANAGER, FOUNDERS, DELIVERY, ...SALES_TEAM];
+
+/** Friendly display names for otherwise codename-y accounts. The stored id
+ *  stays the same (e.g. "Sales1"); only what humans see changes. */
+export const USER_LABELS: Record<string, string> = {
+  Sales1: "Pravallika",
+};
+export function userLabel(user: string | null | undefined): string {
+  if (!user) return user ?? "";
+  return USER_LABELS[user] ?? user;
+}
 
 /** Manager and Founders Office can see everyone's data and reassign brands. */
 export function isPrivileged(user: string): boolean {
@@ -229,6 +249,73 @@ export const HANDLER_COLORS: Record<string, string> = {
 };
 export function handlerColor(name: string | null | undefined): string {
   return (name && HANDLER_COLORS[name]) || "#667085";
+}
+
+// -------------------------------------------------- sales pipeline ----
+export function isSales(user: string): boolean {
+  return SALES_TEAM.includes(user);
+}
+
+export const SALES_STAGES: { key: string; label: string; color: string }[] = [
+  { key: "new_lead", label: "New lead", color: "#2E7DE0" },
+  { key: "contacted", label: "Contacted", color: "#7F77DD" },
+  { key: "no_response", label: "No response", color: "#7C8AA0" },
+  { key: "responded", label: "Responded", color: "#1D9E75" },
+  { key: "negotiating", label: "Negotiating", color: "#BA7517" },
+  { key: "closed_won", label: "Closed", color: "#639922" },
+  { key: "closed_lost", label: "Declined", color: "#E24B4A" },
+  { key: "parked", label: "Parked", color: "#888780" },
+];
+
+export const SALES_PRIORITIES: { key: string; label: string; color: string }[] = [
+  { key: "hot", label: "Hot", color: "#E24B4A" },
+  { key: "warm", label: "Warm", color: "#D97706" },
+  { key: "cold", label: "Cold", color: "#2E7DE0" },
+];
+
+export const ACTIVITY_TYPES: { key: string; label: string; color: string }[] = [
+  { key: "call", label: "Call", color: "#7F77DD" },
+  { key: "email_sent", label: "Email sent", color: "#2E7DE0" },
+  { key: "reply_received", label: "Reply received", color: "#1D9E75" },
+  { key: "meeting", label: "Meeting", color: "#BA7517" },
+  { key: "whatsapp", label: "WhatsApp", color: "#188952" },
+  { key: "note", label: "Note", color: "#888780" },
+];
+
+export interface SalesLead {
+  id: number;
+  brand_name: string;
+  category: string | null;
+  website: string | null;
+  source: string | null;
+  poc1_name: string | null;
+  poc1_email: string | null;
+  poc1_phone: string | null;
+  poc1_designation: string | null;
+  poc2_name: string | null;
+  poc2_email: string | null;
+  poc2_phone: string | null;
+  poc2_designation: string | null;
+  stage: string;
+  priority: string;
+  assigned_to: string;
+  last_contact_date: string | null;
+  next_followup: string | null;
+  touchpoints: number;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface SalesActivity {
+  id: number;
+  lead_id: number;
+  activity_type: string;
+  activity_date: string;
+  summary: string | null;
+  outcome: string | null;
+  next_action: string | null;
+  logged_by: string;
+  created_at: string;
 }
 
 export const REPORTING_OPTIONS = [

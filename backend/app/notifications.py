@@ -1,18 +1,22 @@
-"""Overdue-entry detection with monthly escalation.
+"""Overdue-entry detection with month-by-month escalation.
 
-Runs whenever notifications are fetched. For every *Revenue* merchant, compare
-the latest entry date against the expected reporting interval. Each missed
-merchant-period is ONE case (a single Notification row owned by the handler).
-As more periods pass unresolved, the case's escalation level rises and more
-people can see and act on it:
+Runs whenever notifications are fetched. For every *Revenue* merchant we compare
+what data exists against the expected reporting cadence. Each overdue brand is
+ONE case (a single Notification row owned by the handler). As more reporting
+periods pass with the data still missing, the case's stage rises and more people
+are brought in:
 
-    level 1  ->  Handler
-    level 2  ->  Handler + Manager
-    level 3+ ->  Handler + Manager + Founders Office
+    stage 1  ->  Handler                       (1st missed period)
+    stage 2  ->  Handler + Manager             (2nd missed period)
+    stage 3+ ->  Handler + Manager + Founders  (3rd+ missed period)
 
-The handler can submit a reason; the Manager or Founders Office can approve it
-(stops the case for good) or reject it (escalation keeps climbing). Non-revenue
-merchants are never chased, so a parked brand goes quiet until it resumes.
+Visibility is cumulative: the handler always keeps seeing their own open cases.
+The handler can submit a reason; the Manager (or Founders Office) approves it
+(closes the case for good) or rejects it (the handler sees "Rejected", keeps the
+reason box to try again, and the stage keeps climbing each further period).
+Entering the data resolves the case. Non-revenue merchants are never chased.
+
+`today` is injectable so a dev "time machine" can preview the flow across months.
 """
 from datetime import date, datetime
 
@@ -24,51 +28,88 @@ from .models import Entry, Merchant, Notification
 MANAGER = "Manager"
 FOUNDERS = "Founders Office"
 
-# reporting value -> max days allowed between entries (interval + small grace)
-REPORTING_INTERVAL_DAYS = {
-    "Live daily": 2,
-    "2/week": 5,
-    "3/week": 4,
-    "Weekly": 9,
-    "Monthly": 37,
-    "60 days": 67,
-    "90 days": 97,
-}
+# Month-cadence reporting: step is measured in whole months.
+MONTH_STEP = {"Monthly": 1, "60 days": 2, "90 days": 3}
+# Day-cadence reporting: step is measured in days.
+DAY_STEP = {"Live daily": 1, "2/week": 3, "3/week": 2, "Weekly": 7}
+DAY_GRACE = 2  # small slack before a day-cadence brand counts as overdue
 
 
-def _period_label(last_entry: date | None, reporting: str) -> str:
-    if last_entry is None:
-        return "no data yet"
-    if reporting in ("Monthly", "60 days", "90 days"):
-        return f"since {last_entry.strftime('%B %Y')}"
-    return f"since {last_entry.strftime('%d %b %Y')}"
+def _prev_month(d: date) -> date:
+    """First day of the month before d's month."""
+    if d.month == 1:
+        return date(d.year - 1, 12, 1)
+    return date(d.year, d.month - 1, 1)
 
 
-def recipients_for_level(level: int, owner: str) -> list[str]:
+def _months_between(a: date, b: date) -> int:
+    return (b.year - a.year) * 12 + (b.month - a.month)
+
+
+def _stage_and_period(
+    reporting: str, last: date | None, created: date, today: date
+) -> tuple[int, str]:
+    """How many reporting periods are missing as of `today`, and a period label.
+
+    Returns (0, "") when the brand is not overdue yet.
+    """
+    if reporting in MONTH_STEP:
+        step = MONTH_STEP[reporting]
+        expected = _prev_month(today)  # last completed reporting month
+        if last is not None:
+            base = date(last.year, last.month, 1)
+            gap = _months_between(base, expected)
+            period = f"since {base.strftime('%B %Y')}"
+        else:
+            base = date(created.year, created.month, 1)
+            # A never-filled brand owes from its onboarding month onward.
+            gap = _months_between(base, expected) + 1
+            period = "no data yet"
+        if gap < step:
+            return 0, ""
+        return gap // step, period
+
+    if reporting in DAY_STEP:
+        step = DAY_STEP[reporting]
+        anchor = last if last is not None else created
+        days_over = (today - anchor).days
+        if days_over <= step + DAY_GRACE:
+            return 0, ""
+        period = f"since {last.strftime('%d %b %Y')}" if last is not None else "no data yet"
+        return max(1, days_over // step), period
+
+    return 0, ""
+
+
+def recipients_for_stage(stage: int, owner: str) -> list[str]:
     people = [owner]
-    if level >= 2:
+    if stage >= 2:
         people.append(MANAGER)
-    if level >= 3:
+    if stage >= 3:
         people.append(FOUNDERS)
     return people
 
 
-def _message(level: int, m: Merchant, period: str) -> str:
+def _message(stage: int, m: Merchant, period: str, handler: str) -> str:
     base = f"Data for {m.merchant_name} is overdue (reporting: {m.reporting}, {period})."
-    if level <= 1:
+    if stage <= 1:
         return f"{base} Please update it, or submit a reason for approval."
-    if level == 2:
+    if stage == 2:
         return (
-            f"{base} This is the 2nd missed period, so your Manager has also been "
-            f"notified. Update it, or get a submitted reason approved."
+            f"{base} {handler} was notified last period but the data is still "
+            f"missing, so it has now been escalated to the Manager."
         )
     return (
-        f"{base} This is missed period #{level}. The Manager and Founders Office "
-        f"have both been notified and it needs resolution."
+        f"{base} Still missing after the Manager was looped in — it has now "
+        f"reached the Founders Office and needs resolution."
     )
 
 
-def refresh_notifications(db: Session, today: date | None = None) -> None:
+def refresh_notifications(db: Session, today: date | None = None) -> set[tuple[int, str]]:
+    """Create/update overdue cases as of `today`. Returns the set of
+    (merchant_id, period_label) currently overdue so the caller can hide stale
+    pending cases (e.g. from stepping the time machine back) WITHOUT deleting
+    them — deleting churns row ids and breaks reason submission by id."""
     today = today or date.today()
     merchants = db.query(Merchant).filter(Merchant.revenue_status == "Revenue").all()
 
@@ -76,21 +117,20 @@ def refresh_notifications(db: Session, today: date | None = None) -> None:
         db.query(Entry.merchant_id, func.max(Entry.entry_date)).group_by(Entry.merchant_id).all()
     )
 
+    # (merchant_id, period_label) genuinely overdue as of `today`.
+    overdue_keys: set[tuple[int, str]] = set()
+
     for m in merchants:
-        max_days = REPORTING_INTERVAL_DAYS.get(m.reporting or "", None)
-        if max_days is None or not m.owner:
+        if not m.owner or not m.reporting:
             continue
-
+        created = (m.created_at or datetime.now()).date()
         last = latest_by_merchant.get(m.merchant_id)
-        if last is None:
-            level = 1
-        else:
-            days_over = (today - last).days
-            if days_over <= max_days:
-                continue
-            level = max(1, days_over // max_days)
 
-        period = _period_label(last, m.reporting or "")
+        stage, period = _stage_and_period(m.reporting, last, created, today)
+        if stage <= 0:
+            continue
+        overdue_keys.add((m.merchant_id, period))
+
         existing = (
             db.query(Notification)
             .filter(
@@ -102,17 +142,22 @@ def refresh_notifications(db: Session, today: date | None = None) -> None:
         )
 
         if existing:
-            # Approved cases are closed for good; never re-open them.
-            if existing.status == "approved":
+            # Closed for good: never re-open or re-stage.
+            if existing.status in ("approved", "resolved"):
                 continue
             changed = False
-            if level > (existing.escalation_level or 1):
-                existing.escalation_level = level
-                existing.message = _message(level, m, period)
+            # Stage tracks the current date (can move up or, under the time
+            # machine, back down) so the preview is reversible.
+            if existing.escalation_level != stage:
+                existing.escalation_level = stage
+                changed = True
+            new_msg = _message(stage, m, period, existing.handler)
+            if existing.message != new_msg:
+                existing.message = new_msg
                 changed = True
             # A transferred merchant's open case follows its new handler.
-            if existing.user != m.owner:
-                existing.user = m.owner
+            if existing.handler != m.owner:
+                existing.handler = m.owner
                 changed = True
             if changed:
                 existing.updated_at = datetime.now()
@@ -121,14 +166,18 @@ def refresh_notifications(db: Session, today: date | None = None) -> None:
                 Notification(
                     merchant_id=m.merchant_id,
                     merchant_name=m.merchant_name,
-                    user=m.owner,
-                    message=_message(level, m, period),
+                    handler=m.owner,
+                    message=_message(stage, m, period, m.owner),
                     period_label=period,
                     status="pending",
-                    escalation_level=level,
+                    escalation_level=stage,
+                    # Stamp the case with the (possibly simulated) date it opened.
+                    created_at=datetime.combine(today, datetime.now().time()),
                 )
             )
+
     db.commit()
+    return overdue_keys
 
 
 def resolve_notifications_for_merchant(db: Session, merchant_id: int) -> None:

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, formatMonthYear, formatMoney, formatNumber, formatRailwayTime } from "../api";
 import { downloadCsv } from "../csv";
 import { useToast } from "../Toast";
-import { HANDLERS, type Entry, type Merchant } from "../types";
+import { HANDLERS, isPrivileged, type Entry, type Merchant } from "../types";
 import AddMerchantForm from "./AddMerchantForm";
 import EditHistoryModal from "./EditHistoryModal";
 import EntryForm from "./EntryForm";
@@ -439,15 +439,16 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
                             >
                               Edit
                             </button>
-                            <button
-                              className="btn btn-sm btn-icon btn-del"
-                              disabled={!canEdit}
-                              aria-label={`Delete the ${e.merchant_name} entry`}
-                              title={canEdit ? "Delete this entry" : `Only ${e.entered_by} can delete this entry`}
-                              onClick={() => setConfirmDeleteId(e.id)}
-                            >
-                              <TrashIcon />
-                            </button>
+                            {isPrivileged(user) && (
+                              <button
+                                className="btn btn-sm btn-icon btn-del"
+                                aria-label={`Delete the ${e.merchant_name} entry`}
+                                title="Delete this entry"
+                                onClick={() => setConfirmDeleteId(e.id)}
+                              >
+                                <TrashIcon />
+                              </button>
+                            )}
                           </span>
                         )}
                       </td>

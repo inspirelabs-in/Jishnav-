@@ -9,6 +9,13 @@ interface Props {
   single?: boolean;
   /** Shown when the user types a second value while in single mode. */
   multiHint?: string;
+  /** In single mode, empty the box on focus so the user can type a fresh search
+   *  (the previous pick is restored on blur if they don't choose a new one). */
+  clearQueryOnFocus?: boolean;
+  /** Show the required "*" after the label. Defaults to true. */
+  labelRequired?: boolean;
+  /** Render the field inert (e.g. when an "All" override is active). */
+  disabled?: boolean;
 }
 
 /** Autocomplete that works as single-select (input shows the value) or
@@ -23,6 +30,9 @@ export default function TokenAutocomplete({
   placeholder,
   single = false,
   multiHint,
+  clearQueryOnFocus = false,
+  labelRequired = true,
+  disabled = false,
 }: Props) {
   const [query, setQuery] = useState(single ? selected[0] ?? "" : "");
   const [open, setOpen] = useState(false);
@@ -30,13 +40,14 @@ export default function TokenAutocomplete({
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
 
-  // When the compare toggle flips, reset the typed text: switching to compare
-  // turns the picked value into a chip (clear the box), switching back to single
-  // shows the remaining value as text. Prevents "[Myntra x] myntra" duplication.
+  // Keep the box in sync with the current pick (single mode). Depending on
+  // `selected[0]` (a primitive, not the array) means this fires only when the
+  // value actually changes — a flipped toggle, a new pick, or an external
+  // clear — not on every keystroke, so typing a fresh query is never clobbered.
   useEffect(() => {
     setQuery(single ? selected[0] ?? "" : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [single]);
+  }, [single, selected[0]]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -85,12 +96,12 @@ export default function TokenAutocomplete({
   const dropdownOpen = open && matches.length > 0;
 
   return (
-    <div className="field grow">
-      {label && <label className="req" htmlFor={`${listId}-input`}>{label}</label>}
+    <div className={`field grow ${disabled ? "ta-disabled" : ""}`}>
+      {label && <label className={labelRequired ? "req" : undefined} htmlFor={`${listId}-input`}>{label}</label>}
       <div className="token-wrap">
         <div
           className="token-field"
-          onClick={() => inputRef.current?.focus()}
+          onClick={() => !disabled && inputRef.current?.focus()}
         >
           {!single &&
             selected.map((s) => (
@@ -117,6 +128,7 @@ export default function TokenAutocomplete({
             aria-autocomplete="list"
             aria-activedescendant={dropdownOpen ? `${listId}-opt-${hi}` : undefined}
             placeholder={selected.length === 0 || single ? placeholder : ""}
+            disabled={disabled}
             value={query}
             onChange={(e) => {
               // In single mode the current pick stays until a new one is
@@ -125,8 +137,17 @@ export default function TokenAutocomplete({
               setOpen(true);
               setHi(0);
             }}
-            onFocus={() => setOpen(true)}
-            onBlur={() => window.setTimeout(() => setOpen(false), 180)}
+            onFocus={() => {
+              setOpen(true);
+              if (clearQueryOnFocus && single) setQuery("");
+            }}
+            onBlur={() =>
+              window.setTimeout(() => {
+                setOpen(false);
+                // Restore the current pick if the user didn't choose a new one.
+                if (single) setQuery(selected[0] ?? "");
+              }, 180)
+            }
             onKeyDown={onKeyDown}
           />
         </div>

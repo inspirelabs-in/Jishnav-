@@ -220,7 +220,7 @@ export default function EntryForm({ user, prefillMerchant, onAddNewMerchant, onS
       </div>
 
       {merchant && (
-        <MerchantInfoStrip merchant={merchant} onUpdated={(m) => setMerchant(m)} />
+        <MerchantInfoStrip merchant={merchant} user={user} onUpdated={(m) => setMerchant(m)} />
       )}
       {foreignBrand && (
         <p className="entry-notice entry-notice-block">
@@ -301,7 +301,7 @@ export default function EntryForm({ user, prefillMerchant, onAddNewMerchant, onS
   );
 }
 
-function MerchantInfoStrip({ merchant, onUpdated }: { merchant: Merchant; onUpdated: (m: Merchant) => void }) {
+function MerchantInfoStrip({ merchant, user, onUpdated }: { merchant: Merchant; user: string; onUpdated: (m: Merchant) => void }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState({
@@ -349,6 +349,7 @@ function MerchantInfoStrip({ merchant, onUpdated }: { merchant: Merchant; onUpda
         payout: draft.payout,
         deal_type: draft.deal_type,
         owner: draft.owner,
+        edited_by: user,
       });
       onUpdated(updated);
       setEditing(false);

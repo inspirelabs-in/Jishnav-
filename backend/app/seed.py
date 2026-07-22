@@ -7,7 +7,7 @@ import random
 from datetime import date, datetime, time, timedelta
 
 from .database import Base, SessionLocal, engine
-from .models import Entry, Merchant
+from .models import Entry, Merchant, SalesActivity, SalesLead
 from .utils import merchant_url
 
 random.seed(42)
@@ -83,7 +83,15 @@ MERCHANTS = [
      "Weekly", "2%", "Coupon based", "Revenue", "Meena"),
     (9010, "Croma", 2072, "Electronics", 0, None, 61, "CJ",
      "Monthly", "3.5%", "Link based", "Revenue", "Swati"),
+    # Never-filled brand: onboarded but no data yet, so the overdue case can be
+    # walked through the escalation stages with the notification time machine.
+    (9011, "TestBrandXYZ", 2079, "Fashion", 0, None, 0, None,
+     "Monthly", "5%", "Coupon based", "Revenue", "Meena"),
 ]
+
+# Brands deliberately left with NO entries at all (they exercise the
+# "no data yet" branch of the notification flow).
+NO_DATA_BRANDS = {"TestBrandXYZ"}
 
 # Entry cadence in days per reporting frequency
 CADENCE_DAYS = {
@@ -110,6 +118,8 @@ OVERDUE_STOP_DAYS = {"Nike": 12, "1mglabs": 75, "12Go": 25}
 
 
 def gen_entries(db, m: Merchant):
+    if m.merchant_name in NO_DATA_BRANDS:
+        return
     cadence = CADENCE_DAYS[m.reporting]
     start = TODAY - timedelta(days=180)
     stop = TODAY - timedelta(days=OVERDUE_STOP_DAYS.get(m.merchant_name, 0))
@@ -145,12 +155,194 @@ def gen_entries(db, m: Merchant):
         d += timedelta(days=cadence)
 
 
+SALES_LEADS = [
+    # (brand, category, source, stage, priority, assigned, poc1_name, poc1_email, poc1_phone, poc1_desig,
+    #  poc2_name, poc2_email, poc2_phone, poc2_desig, days_since_created, days_since_contact, followup_in_days)
+    ("Myntra", "Fashion", "Cold outreach", "negotiating", "hot", "Sales1",
+     "Rahul Verma", "rahul.v@myntra.com", "9876543210", "BD Head",
+     "Priya Sen", "priya.s@myntra.com", "9876543211", "Marketing Lead",
+     30, 1, 1),
+    ("Zomato", "Food delivery", "Referral", "responded", "hot", "Sales1",
+     "Ankit Jain", "ankit.j@zomato.com", "9123456780", "Partnerships Manager",
+     None, None, None, None,
+     25, 2, 3),
+    ("PhonePe", "Fintech", "LinkedIn", "no_response", "warm", "Sales1",
+     "Deepak Kumar", "deepak.k@phonepe.com", "9988776655", "Growth Lead",
+     "Meghana R", "meghana@phonepe.com", "9988776656", "BD Associate",
+     20, 5, 5),
+    ("Urban Company", "Home services", "Cold outreach", "new_lead", "cold", "Sales1",
+     "Sneha Patel", "sneha.p@urbancompany.com", "9112233445", "Marketing Manager",
+     None, None, None, None,
+     5, None, 7),
+    ("Nykaa", "Beauty", "Inbound", "negotiating", "hot", "Sales2",
+     "Kavita Sharma", "kavita@nykaa.com", "9001122334", "Affiliate Manager",
+     "Ravi Mehra", "ravi.m@nykaa.com", "9001122335", "VP Marketing",
+     45, 0, 2),
+    ("MakeMyTrip", "Travel", "Event", "responded", "warm", "Sales2",
+     "Sanjay Gupta", "sanjay.g@makemytrip.com", "9556677889", "Sr BD Manager",
+     None, None, None, None,
+     35, 4, 4),
+    ("Boat", "Electronics", "Cold outreach", "responded", "warm", "Sales2",
+     "Arun Nair", "arun@boat-lifestyle.com", "9667788990", "Marketing Head",
+     "Divya K", "divya@boat-lifestyle.com", "9667788991", "Digital Lead",
+     15, 7, 3),
+    ("Lenskart", "Eyewear", "LinkedIn", "new_lead", "cold", "Sales2",
+     "Pooja Reddy", "pooja.r@lenskart.com", "9778899001", "Partnerships",
+     None, None, None, None,
+     3, None, 7),
+    ("Swiggy", "Food delivery", "Referral", "closed_won", "hot", "Sales1",
+     "Vikram Singh", "vikram@swiggy.com", "9334455667", "Affiliate Head",
+     "Neha Arora", "neha.a@swiggy.com", "9334455668", "BD Manager",
+     60, 10, None),
+    ("Pepperfry", "Furniture", "Cold outreach", "closed_lost", "cold", "Sales2",
+     "Amit Desai", "amit.d@pepperfry.com", "9445566778", "Marketing Director",
+     None, None, None, None,
+     50, 30, None),
+    ("BigBasket", "Grocery", "Inbound", "parked", "cold", "Sales1",
+     "Geeta Rao", "geeta@bigbasket.com", "9556677880", "BD Lead",
+     None, None, None, None,
+     40, 20, None),
+    ("ixigo", "Travel", "Event", "responded", "hot", "Sales1",
+     "Mohit Tandon", "mohit@ixigo.com", "9667788002", "Partnerships Lead",
+     "Shreya Joshi", "shreya@ixigo.com", "9667788003", "Growth Manager",
+     22, 1, 2),
+    ("Mamaearth", "Beauty", "LinkedIn", "no_response", "cold", "Sales2",
+     "Ritika Agarwal", "ritika@mamaearth.in", "9778800112", "Brand Manager",
+     None, None, None, None,
+     10, 8, 5),
+    ("CRED", "Fintech", "Cold outreach", "new_lead", "warm", "Sales1",
+     "Varun Mehta", "varun.m@cred.club", "9889911223", "Affiliate Partnerships",
+     None, None, None, None,
+     2, None, 5),
+    ("Flipkart", "E-commerce", "Referral", "negotiating", "hot", "Sales2",
+     "Kiran Das", "kiran.d@flipkart.com", "9990022334", "Sr VP Affiliates",
+     "Ananya Bhatt", "ananya@flipkart.com", "9990022335", "Program Manager",
+     55, 1, 1),
+]
+
+SALES_ACTIVITIES_DATA = [
+    # (lead_brand, activity_type, days_ago, summary, outcome, next_action, logged_by)
+    ("Myntra", "email_sent", 28, "Sent introductory mail about GrabOn affiliate program", "Delivered", "Wait for reply", "Sales1"),
+    ("Myntra", "reply_received", 20, "Rahul replied asking for commission details and traffic numbers", "Interested", "Share media kit and rate card", "Sales1"),
+    ("Myntra", "call", 15, "Had a 30 min call discussing partnership terms and coupon exclusivity", "Positive", "Send proposal doc", "Sales1"),
+    ("Myntra", "email_sent", 12, "Sent detailed proposal with revenue projections", "Delivered", "Follow up in 3 days", "Sales1"),
+    ("Myntra", "call", 1, "Follow-up call, they are reviewing internally with finance team", "In review", "Check back Thursday", "Sales1"),
+
+    ("Zomato", "email_sent", 22, "Reached out via Ankit after referral from Swiggy contact", "Delivered", "Wait for response", "Sales1"),
+    ("Zomato", "reply_received", 15, "Ankit interested, asked about our user demographics", "Interested", "Share user data deck", "Sales1"),
+    ("Zomato", "email_sent", 10, "Shared GrabOn user demographics and monthly traffic report", "Delivered", "Schedule call", "Sales1"),
+    ("Zomato", "call", 2, "Discussed potential coupon campaign for monsoon season", "Positive", "Send rate card", "Sales1"),
+
+    ("PhonePe", "email_sent", 18, "Cold outreach via LinkedIn connection to Deepak", "Delivered", "Follow up in a week", "Sales1"),
+    ("PhonePe", "call", 5, "Brief call, Deepak asked us to reach out again next month", "Busy now", "Follow up 2nd week Aug", "Sales1"),
+
+    ("Nykaa", "email_sent", 40, "Initial outreach about beauty vertical partnership", "Delivered", None, "Sales2"),
+    ("Nykaa", "reply_received", 35, "Kavita responded positively, asked for a meeting", "Very interested", "Schedule meeting", "Sales2"),
+    ("Nykaa", "meeting", 28, "In-person meeting at Nykaa HQ, discussed exclusive coupon program", "Aligned on terms", "Draft agreement", "Sales2"),
+    ("Nykaa", "email_sent", 20, "Sent draft partnership agreement", "Delivered", "Await legal review", "Sales2"),
+    ("Nykaa", "call", 10, "Legal has minor changes, mostly approved", "Almost done", "Revise and resend", "Sales2"),
+    ("Nykaa", "email_sent", 5, "Sent revised agreement with legal changes", "Delivered", "Wait for signature", "Sales2"),
+    ("Nykaa", "call", 0, "Kavita confirmed, signing this week", "Confirmed", "Collect signed copy", "Sales2"),
+
+    ("MakeMyTrip", "email_sent", 30, "Met Sanjay at travel industry event, followed up via email", "Delivered", None, "Sales2"),
+    ("MakeMyTrip", "reply_received", 22, "Sanjay interested in travel deals vertical", "Interested", "Share case study", "Sales2"),
+    ("MakeMyTrip", "email_sent", 15, "Shared case study of ixigo partnership success", "Delivered", "Schedule demo", "Sales2"),
+    ("MakeMyTrip", "whatsapp", 4, "Quick message to schedule demo call", "Replied", "Demo on Friday", "Sales2"),
+
+    ("Boat", "email_sent", 12, "Sent introductory email about electronics vertical", "Delivered", "Follow up call", "Sales2"),
+    ("Boat", "call", 7, "Spoke with Arun, he wants to discuss with Divya first", "Needs internal check", "Call back next week", "Sales2"),
+
+    ("Swiggy", "email_sent", 55, "Initial partnership outreach", "Delivered", None, "Sales1"),
+    ("Swiggy", "reply_received", 50, "Vikram replied immediately, very interested", "Very interested", None, "Sales1"),
+    ("Swiggy", "meeting", 42, "Met at Swiggy office for detailed discussion", "Aligned", "Send agreement", "Sales1"),
+    ("Swiggy", "email_sent", 38, "Sent partnership agreement", "Delivered", None, "Sales1"),
+    ("Swiggy", "call", 25, "Agreement signed, onboarding process started", "Deal closed", None, "Sales1"),
+    ("Swiggy", "note", 10, "First campaign live, 500+ coupon redemptions in week 1", "Live", None, "Sales1"),
+
+    ("Pepperfry", "email_sent", 45, "Reached out about furniture deals partnership", "Delivered", None, "Sales2"),
+    ("Pepperfry", "call", 38, "Call with Amit, not interested at this time due to budget cuts", "Not interested", "Park for Q4", "Sales2"),
+    ("Pepperfry", "email_sent", 30, "Follow-up with revised lower-commitment proposal", "No reply", "Move to closed lost", "Sales2"),
+
+    ("ixigo", "email_sent", 20, "Outreach after travel industry meet", "Delivered", None, "Sales1"),
+    ("ixigo", "reply_received", 14, "Mohit very enthusiastic about coupon partnerships", "Very interested", "Share proposal", "Sales1"),
+    ("ixigo", "email_sent", 8, "Sent detailed proposal with travel vertical performance data", "Delivered", "Follow up call", "Sales1"),
+    ("ixigo", "call", 1, "Great call with both Mohit and Shreya, moving to negotiation soon", "Positive", "Send final terms", "Sales1"),
+
+    ("Mamaearth", "email_sent", 10, "Reached out to Ritika via LinkedIn connection about beauty vertical", "Delivered", "Follow up in a week", "Sales2"),
+    ("Mamaearth", "whatsapp", 8, "Sent follow-up WhatsApp to Ritika, no reply yet", "No reply", "Try again in 5 days", "Sales2"),
+
+    ("Flipkart", "email_sent", 50, "Approached Kiran through referral network", "Delivered", None, "Sales2"),
+    ("Flipkart", "reply_received", 42, "Kiran interested, connected us with Ananya", "Interested", "Set up call with both", "Sales2"),
+    ("Flipkart", "meeting", 30, "Video call with Kiran and Ananya about affiliate program expansion", "Very positive", "Send proposal", "Sales2"),
+    ("Flipkart", "email_sent", 22, "Detailed proposal with tiered commission structure", "Delivered", "Follow up", "Sales2"),
+    ("Flipkart", "call", 10, "They want to pilot with 50 brands first", "Negotiating pilot", "Revise scope for pilot", "Sales2"),
+    ("Flipkart", "email_sent", 3, "Sent revised pilot scope proposal", "Delivered", "Await final approval", "Sales2"),
+    ("Flipkart", "whatsapp", 1, "Ananya confirmed pilot scope looks good, final sign-off pending", "Almost there", "Call Friday for sign-off", "Sales2"),
+]
+
+
+def seed_sales(db):
+    """Seed sales pipeline with demo leads and activities."""
+    leads_by_brand = {}
+    for row in SALES_LEADS:
+        (brand, category, source, stage, priority, assigned,
+         p1n, p1e, p1p, p1d, p2n, p2e, p2p, p2d,
+         days_created, days_contact, followup_days) = row
+        lead = SalesLead(
+            brand_name=brand, category=category, source=source,
+            stage=stage, priority=priority, assigned_to=assigned,
+            poc1_name=p1n, poc1_email=p1e, poc1_phone=p1p, poc1_designation=p1d,
+            poc2_name=p2n, poc2_email=p2e, poc2_phone=p2p, poc2_designation=p2d,
+            last_contact_date=(
+                datetime.combine(TODAY - timedelta(days=days_contact), time(14, 0))
+                if days_contact is not None else None
+            ),
+            next_followup=(
+                TODAY + timedelta(days=followup_days)
+                if followup_days is not None else None
+            ),
+            created_at=datetime.combine(TODAY - timedelta(days=days_created), time(10, 0)),
+        )
+        db.add(lead)
+        db.flush()
+        leads_by_brand[brand] = lead
+
+    for row in SALES_ACTIVITIES_DATA:
+        brand, atype, days_ago, summary, outcome, next_action, logged_by = row
+        lead = leads_by_brand.get(brand)
+        if not lead:
+            continue
+        db.add(SalesActivity(
+            lead_id=lead.id,
+            activity_type=atype,
+            activity_date=datetime.combine(
+                TODAY - timedelta(days=days_ago),
+                time(random.randint(9, 18), random.randint(0, 59)),
+            ),
+            summary=summary,
+            outcome=outcome,
+            next_action=next_action,
+            logged_by=logged_by,
+            created_at=datetime.combine(
+                TODAY - timedelta(days=days_ago),
+                time(random.randint(9, 18), random.randint(0, 59)),
+            ),
+        ))
+
+
 def main():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         for row in MERCHANTS:
+            onboarded = TODAY - timedelta(days=200)
+            if row[1] in NO_DATA_BRANDS:
+                onboarded = datetime.combine(
+                    date(TODAY.year, TODAY.month, 1), time(10, 0)
+                )
+            else:
+                onboarded = datetime.combine(onboarded, time(10, 0))
             m = Merchant(
                 merchant_id=row[0], merchant_name=row[1],
                 breadcrumb1=row[2], breadcrumb1_name=row[3],
@@ -159,12 +351,17 @@ def main():
                 url=merchant_url(row[1]),
                 reporting=row[8], payout=row[9], deal_type=row[10],
                 revenue_status=row[11], owner=row[12],
+                created_at=onboarded,
             )
             db.add(m)
             gen_entries(db, m)
+        seed_sales(db)
         db.commit()
         n_entries = db.query(Entry).count()
-        print(f"Seeded {len(MERCHANTS)} merchants, {n_entries} entries.")
+        n_leads = db.query(SalesLead).count()
+        n_acts = db.query(SalesActivity).count()
+        print(f"Seeded {len(MERCHANTS)} merchants, {n_entries} entries, "
+              f"{n_leads} sales leads, {n_acts} activities.")
     finally:
         db.close()
 

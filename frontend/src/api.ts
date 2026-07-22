@@ -4,8 +4,11 @@ import type {
   EditLog,
   Entry,
   Merchant,
+  MerchantEditLog,
   Notification,
   OverviewResponse,
+  SalesActivity,
+  SalesLead,
   StatusEvent,
   Transfer,
 } from "./types";
@@ -37,7 +40,7 @@ export const api = {
 
   updateMerchant: (
     merchantId: number,
-    payload: { category?: string; sub_category?: string; reporting?: string; payout?: string; deal_type?: string; owner?: string }
+    payload: { category?: string; sub_category?: string; reporting?: string; payout?: string; deal_type?: string; owner?: string; edited_by?: string }
   ) =>
     request<Merchant>(`/api/merchants/${merchantId}`, {
       method: "PUT",
@@ -125,17 +128,46 @@ export const api = {
       { method: "DELETE" }
     ),
 
-  listEditLogs: (params?: { owner?: string; edited_by?: string; merchant?: string }) => {
+  listEditLogs: (params?: {
+    owner?: string;
+    edited_by?: string;
+    merchant?: string;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+  }) => {
     const s = new URLSearchParams();
     if (params?.owner) s.set("owner", params.owner);
     if (params?.edited_by) s.set("edited_by", params.edited_by);
     if (params?.merchant) s.set("merchant", params.merchant);
+    if (params?.date_from) s.set("date_from", params.date_from);
+    if (params?.date_to) s.set("date_to", params.date_to);
+    if (params?.limit) s.set("limit", String(params.limit));
     const qs = s.toString();
     return request<EditLog[]>(`/api/edit-logs${qs ? `?${qs}` : ""}`);
   },
 
-  getNotifications: (user: string) =>
-    request<Notification[]>(`/api/notifications?user=${encodeURIComponent(user)}`),
+  listMerchantEditLogs: (params?: {
+    owner?: string;
+    merchant?: string;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+  }) => {
+    const s = new URLSearchParams();
+    if (params?.owner) s.set("owner", params.owner);
+    if (params?.merchant) s.set("merchant", params.merchant);
+    if (params?.date_from) s.set("date_from", params.date_from);
+    if (params?.date_to) s.set("date_to", params.date_to);
+    if (params?.limit) s.set("limit", String(params.limit));
+    const qs = s.toString();
+    return request<MerchantEditLog[]>(`/api/merchant-edit-logs${qs ? `?${qs}` : ""}`);
+  },
+
+  getNotifications: (user: string, asOf?: string) =>
+    request<Notification[]>(
+      `/api/notifications?user=${encodeURIComponent(user)}${asOf ? `&as_of=${asOf}` : ""}`
+    ),
 
   submitReason: (id: number, reason: string) =>
     request<{ status: string }>(`/api/notifications/${id}/reason`, {
@@ -171,12 +203,54 @@ export const api = {
     return request<AnalyticsResponse>(`/api/analytics?${search}`);
   },
 
+  // -------------------------------------------------- sales pipeline ----
+
+  listLeads: (filters: {
+    assigned_to?: string;
+    stage?: string;
+    priority?: string;
+    search?: string;
+  }) => {
+    const s = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) {
+      if (v) s.set(k, v);
+    }
+    return request<SalesLead[]>(`/api/sales/leads?${s}`);
+  },
+
+  createLead: (payload: Record<string, unknown>) =>
+    request<SalesLead>("/api/sales/leads", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateLead: (id: number, payload: Record<string, unknown>) =>
+    request<SalesLead>(`/api/sales/leads/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteLead: (id: number) =>
+    request<{ deleted: boolean }>(`/api/sales/leads/${id}`, { method: "DELETE" }),
+
+  listActivities: (leadId: number) =>
+    request<SalesActivity[]>(`/api/sales/leads/${leadId}/activities`),
+
+  createActivity: (leadId: number, payload: Record<string, unknown>) =>
+    request<SalesActivity>(`/api/sales/leads/${leadId}/activities`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   overview: (params: {
     owner?: string;
     months?: number;
     date_from?: string;
     date_to?: string;
     merchant?: string;
+    brands?: string[];
+    categories?: string[];
+    handlers?: string[];
   }) => {
     const s = new URLSearchParams();
     if (params.owner) s.set("owner", params.owner);
@@ -184,6 +258,9 @@ export const api = {
     if (params.date_from) s.set("date_from", params.date_from);
     if (params.date_to) s.set("date_to", params.date_to);
     if (params.merchant) s.set("merchant", params.merchant);
+    for (const b of params.brands ?? []) s.append("brands", b);
+    for (const c of params.categories ?? []) s.append("categories", c);
+    for (const h of params.handlers ?? []) s.append("handlers", h);
     return request<OverviewResponse>(`/api/analytics/overview?${s}`);
   },
 };

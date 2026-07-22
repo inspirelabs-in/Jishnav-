@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import func, inspect, text
+from sqlalchemy import func, inspect, or_, text
 from sqlalchemy.orm import Session
 
 from . import models
@@ -20,23 +20,35 @@ def _run_migrations() -> None:
     insp = inspect(engine)
     if insp.has_table("merchants"):
         cols = [c["name"] for c in insp.get_columns("merchants")]
-        if "url" not in cols:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE merchants ADD COLUMN url VARCHAR"))
-        with SessionLocal() as db:
-            missing = db.query(models.Merchant).filter(models.Merchant.url.is_(None)).all()
-            for m in missing:
-                m.url = merchant_url(m.merchant_name)
-            if missing:
-                db.commit()
+        for col, ddl in [("url", "VARCHAR"), ("created_at", "DATETIME"), ("updated_at", "DATETIME")]:
+            if col not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE merchants ADD COLUMN {col} {ddl}"))
+        # Backfill via raw SQL (NOT the ORM) so this never SELECTs a model
+        # column that the on-disk table hasn't gained yet — that ordering trap
+        # is what crash-loops the server on an out-of-date DB.
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text("SELECT merchant_id, merchant_name FROM merchants WHERE url IS NULL")
+            ).all()
+            for mid, name in rows:
+                conn.execute(
+                    text("UPDATE merchants SET url = :u WHERE merchant_id = :id"),
+                    {"u": merchant_url(name), "id": mid},
+                )
+            conn.execute(
+                text("UPDATE merchants SET created_at = :now WHERE created_at IS NULL"),
+                {"now": datetime.now()},
+            )
     if insp.has_table("notifications"):
         ncols = [c["name"] for c in insp.get_columns("notifications")]
         if "escalation_level" not in ncols:
-            # New one-case-per-miss model: add the column and clear the old
-            # per-recipient rows (they regenerate on the next fetch).
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE notifications ADD COLUMN escalation_level INTEGER DEFAULT 1"))
                 conn.execute(text("DELETE FROM notifications"))
+        if "user" in ncols and "handler" not in ncols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE notifications RENAME COLUMN user TO handler"))
     if insp.has_table("entries"):
         ecols = [c["name"] for c in insp.get_columns("entries")]
         adds = {
@@ -51,8 +63,8 @@ def _run_migrations() -> None:
                     conn.execute(text(f"ALTER TABLE entries ADD COLUMN {col} {ddl}"))
 
 
-Base.metadata.create_all(bind=engine)  # creates any missing tables (e.g. transfers)
 _run_migrations()
+Base.metadata.create_all(bind=engine)  # creates any missing tables (e.g. transfers)
 
 app = FastAPI(title="CR Portal API")
 
@@ -114,6 +126,7 @@ class MerchantUpdate(BaseModel):
     payout: str | None = None
     deal_type: str | None = None
     owner: str | None = None
+    edited_by: str | None = None
 
 
 class EntryCreate(BaseModel):
@@ -192,14 +205,19 @@ def _compute_cr(clicks: int | None, sales: int | None) -> float | None:
 
 @app.get("/api/merchants/search")
 def search_merchants(q: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    q_norm = q.replace(" ", "")
     rows = (
         db.query(models.Merchant)
-        .filter(models.Merchant.merchant_name.ilike(f"%{q}%"))
+        .filter(
+            func.replace(func.lower(models.Merchant.merchant_name), " ", "").contains(
+                q_norm.lower()
+            )
+        )
         .order_by(models.Merchant.merchant_name)
         .limit(10)
         .all()
     )
-    exact = any(r.merchant_name.lower() == q.strip().lower() for r in rows)
+    exact = any(r.merchant_name.replace(" ", "").lower() == q_norm.lower() for r in rows)
     return {
         "results": [MerchantOut.model_validate(r).model_dump() for r in rows],
         "exact_match": exact,
@@ -264,21 +282,62 @@ def update_merchant(merchant_id: int, payload: MerchantUpdate, db: Session = Dep
     m = db.get(models.Merchant, merchant_id)
     if not m:
         raise HTTPException(404, "Merchant not found")
-    if payload.category is not None:
-        m.breadcrumb1_name = payload.category or None
-    if payload.sub_category is not None:
-        m.breadcrumb2_name = payload.sub_category or None
-    if payload.reporting is not None:
-        m.reporting = payload.reporting or None
-    if payload.payout is not None:
-        m.payout = payload.payout or None
-    if payload.deal_type is not None:
-        m.deal_type = payload.deal_type or None
-    if payload.owner is not None:
-        m.owner = payload.owner or None
+    # Map incoming fields to merchant columns; skip any left unset (None).
+    incoming = [
+        ("breadcrumb1_name", payload.category),
+        ("breadcrumb2_name", payload.sub_category),
+        ("reporting", payload.reporting),
+        ("payout", payload.payout),
+        ("deal_type", payload.deal_type),
+        ("owner", payload.owner),
+    ]
+    changes: dict[str, dict] = {}
+    for attr, raw in incoming:
+        if raw is None:
+            continue  # field not part of this update
+        new = raw or None
+        old = getattr(m, attr)
+        if old != new:
+            changes[attr] = {"old": old, "new": new}
+            setattr(m, attr, new)
+    if changes:
+        db.add(models.MerchantEditLog(
+            merchant_id=m.merchant_id, merchant_name=m.merchant_name,
+            edited_by=payload.edited_by or "Unknown",
+            edited_at=datetime.now(), changes=json.dumps(changes),
+        ))
     db.commit()
     db.refresh(m)
     return MerchantOut.model_validate(m).model_dump()
+
+
+@app.get("/api/merchant-edit-logs")
+def list_merchant_edit_logs(
+    owner: str | None = None,
+    merchant: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    q = db.query(models.MerchantEditLog)
+    if merchant:
+        q = q.filter(models.MerchantEditLog.merchant_name.ilike(f"%{merchant}%"))
+    if owner and owner != "All":
+        owned = db.query(models.Merchant.merchant_id).filter(models.Merchant.owner == owner)
+        q = q.filter(models.MerchantEditLog.merchant_id.in_(owned))
+    if date_from:
+        q = q.filter(models.MerchantEditLog.edited_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        q = q.filter(models.MerchantEditLog.edited_at <= datetime.combine(date_to, datetime.max.time()))
+    rows = q.order_by(models.MerchantEditLog.edited_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": r.id, "merchant_id": r.merchant_id, "merchant_name": r.merchant_name,
+            "edited_by": r.edited_by, "edited_at": r.edited_at, "changes": json.loads(r.changes),
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------- entries ---
@@ -609,6 +668,8 @@ def list_edit_logs(
     owner: str | None = None,
     edited_by: str | None = None,
     merchant: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     limit: int = 200,
     db: Session = Depends(get_db),
 ):
@@ -621,6 +682,11 @@ def list_edit_logs(
         # Scope to the merchants this handler currently owns.
         owned = db.query(models.Merchant.merchant_id).filter(models.Merchant.owner == owner)
         q = q.filter(models.EditLog.merchant_id.in_(owned))
+    # Filter on when the edit was made (edited_at), inclusive of both bounds.
+    if date_from:
+        q = q.filter(models.EditLog.edited_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        q = q.filter(models.EditLog.edited_at <= datetime.combine(date_to, datetime.max.time()))
     rows = q.order_by(models.EditLog.edited_at.desc()).limit(limit).all()
     return [
         {
@@ -635,12 +701,20 @@ def list_edit_logs(
 # ---------------------------------------------------------- notifications ---
 
 @app.get("/api/notifications")
-def get_notifications(user: str, db: Session = Depends(get_db)):
-    refresh_notifications(db)
+def get_notifications(user: str, as_of: str | None = None, db: Session = Depends(get_db)):
+    # `as_of` (YYYY-MM-DD) drives the dev time machine: notifications are
+    # recomputed as if that were today, so the escalation flow can be previewed.
+    today = None
+    if as_of:
+        try:
+            today = date.fromisoformat(as_of)
+        except ValueError:
+            raise HTTPException(422, "as_of must be YYYY-MM-DD")
+    overdue = refresh_notifications(db, today=today)
     q = db.query(models.Notification)
     if user == MANAGER:
         # A 2nd-period escalation reaches the Manager; they can also act on any
-        # reason a handler submits, even at level 1.
+        # reason a handler submits, even at stage 1.
         q = q.filter(
             (models.Notification.escalation_level >= 2)
             | (models.Notification.status == "reason_submitted")
@@ -649,12 +723,19 @@ def get_notifications(user: str, db: Session = Depends(get_db)):
         # The Founders Office only sees cases that reached the 3rd period.
         q = q.filter(models.Notification.escalation_level >= 3)
     else:
-        q = q.filter(models.Notification.user == user)
+        q = q.filter(models.Notification.handler == user)
     rows = q.order_by(models.Notification.created_at.desc()).limit(100).all()
+    # Hide (don't delete) still-pending cases that aren't overdue as of `today` —
+    # e.g. left over from stepping the time machine back. Rows are never deleted,
+    # so their ids stay stable and reason/approve-by-id keep working.
+    rows = [
+        r for r in rows
+        if r.status != "pending" or (r.merchant_id, r.period_label) in overdue
+    ]
     return [
         {
             "id": r.id, "merchant_id": r.merchant_id, "merchant_name": r.merchant_name,
-            "user": r.user, "handler": r.user, "message": r.message,
+            "handler": r.handler, "message": r.message,
             "period_label": r.period_label, "reason": r.reason, "status": r.status,
             "escalation_level": r.escalation_level or 1,
             "created_at": r.created_at, "updated_at": r.updated_at,
@@ -738,9 +819,9 @@ def transfer_merchant(payload: TransferIn, db: Session = Depends(get_db)):
         .filter(
             models.Notification.merchant_id == m.merchant_id,
             models.Notification.status.in_(["pending", "reason_submitted"]),
-            models.Notification.user == from_handler,
+            models.Notification.handler == from_handler,
         )
-        .update({"user": payload.to_handler}, synchronize_session=False)
+        .update({"handler": payload.to_handler}, synchronize_session=False)
     )
     db.commit()
     return {
@@ -943,6 +1024,9 @@ def analytics_overview(
     date_from: date | None = None,
     date_to: date | None = None,
     merchant: str | None = None,
+    brands: list[str] | None = Query(None),
+    categories: list[str] | None = Query(None),
+    handlers: list[str] | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """Portfolio overview: monthly totals across a handler's whole book (or every
@@ -965,9 +1049,18 @@ def analytics_overview(
         start, end, month_keys = _completed_window(months)
 
     mq = db.query(models.Merchant)
-    if owner and owner != "All":
+    # Handler filter: an explicit list wins; else the single `owner` (legacy).
+    if handlers:
+        mq = mq.filter(models.Merchant.owner.in_(handlers))
+    elif owner and owner != "All":
         mq = mq.filter(models.Merchant.owner == owner)
-    if merchant:
+    # Category filter: brand must sit in one of the chosen categories.
+    if categories:
+        mq = mq.filter(models.Merchant.breadcrumb1_name.in_(categories))
+    # Brand filter: name matches ANY of the chosen brand terms; else legacy single.
+    if brands:
+        mq = mq.filter(or_(*[models.Merchant.merchant_name.ilike(f"%{b}%") for b in brands]))
+    elif merchant:
         mq = mq.filter(models.Merchant.merchant_name.ilike(f"%{merchant}%"))
     merchants = mq.order_by(models.Merchant.merchant_name).all()
     merchant_ids = [m.merchant_id for m in merchants]
@@ -1076,3 +1169,263 @@ def analytics_overview(
         "prev_totals": prev_totals,
         "by_merchant": by_merchant,
     }
+
+
+# ---------------------------------------------------------- sales pipeline ---
+
+SALES_TEAM = ["Sales1", "Sales2"]
+
+SALES_STAGES = [
+    "new_lead", "contacted", "no_response", "responded", "negotiating",
+    "closed_won", "closed_lost", "parked",
+]
+
+SALES_PRIORITIES = ["hot", "warm", "cold"]
+
+ACTIVITY_TYPES = ["call", "email_sent", "reply_received", "meeting", "whatsapp", "note"]
+
+LEAD_SOURCES = ["Cold outreach", "Referral", "Inbound", "Event", "LinkedIn", "Other"]
+
+
+class LeadCreate(BaseModel):
+    brand_name: str
+    category: str | None = None
+    website: str | None = None
+    source: str | None = None
+    poc1_name: str | None = None
+    poc1_email: str | None = None
+    poc1_phone: str | None = None
+    poc1_designation: str | None = None
+    poc2_name: str | None = None
+    poc2_email: str | None = None
+    poc2_phone: str | None = None
+    poc2_designation: str | None = None
+    stage: str = "new_lead"
+    priority: str = "warm"
+    assigned_to: str
+    next_followup: date | None = None
+
+
+class LeadUpdate(BaseModel):
+    brand_name: str | None = None
+    category: str | None = None
+    website: str | None = None
+    source: str | None = None
+    poc1_name: str | None = None
+    poc1_email: str | None = None
+    poc1_phone: str | None = None
+    poc1_designation: str | None = None
+    poc2_name: str | None = None
+    poc2_email: str | None = None
+    poc2_phone: str | None = None
+    poc2_designation: str | None = None
+    stage: str | None = None
+    priority: str | None = None
+    assigned_to: str | None = None
+    next_followup: date | None = None
+
+
+class ActivityCreate(BaseModel):
+    activity_type: str
+    activity_date: datetime | None = None
+    summary: str | None = None
+    outcome: str | None = None
+    next_action: str | None = None
+    next_followup: date | None = None
+    logged_by: str
+
+
+def _lead_out(lead: models.SalesLead) -> dict:
+    activity_count = len(lead.activities) if lead.activities else 0
+    return {
+        "id": lead.id,
+        "brand_name": lead.brand_name,
+        "category": lead.category,
+        "website": lead.website,
+        "source": lead.source,
+        "poc1_name": lead.poc1_name,
+        "poc1_email": lead.poc1_email,
+        "poc1_phone": lead.poc1_phone,
+        "poc1_designation": lead.poc1_designation,
+        "poc2_name": lead.poc2_name,
+        "poc2_email": lead.poc2_email,
+        "poc2_phone": lead.poc2_phone,
+        "poc2_designation": lead.poc2_designation,
+        "stage": lead.stage,
+        "priority": lead.priority,
+        "assigned_to": lead.assigned_to,
+        "last_contact_date": lead.last_contact_date,
+        "next_followup": lead.next_followup,
+        "touchpoints": activity_count,
+        "created_at": lead.created_at,
+        "updated_at": lead.updated_at,
+    }
+
+
+@app.get("/api/sales/leads")
+def list_leads(
+    assigned_to: str | None = None,
+    stage: str | None = None,
+    priority: str | None = None,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(models.SalesLead)
+    if assigned_to and assigned_to != "All":
+        q = q.filter(models.SalesLead.assigned_to == assigned_to)
+    if stage and stage != "all":
+        q = q.filter(models.SalesLead.stage == stage)
+    if priority and priority != "all":
+        q = q.filter(models.SalesLead.priority == priority)
+    if search:
+        q = q.filter(
+            or_(
+                models.SalesLead.brand_name.ilike(f"%{search}%"),
+                models.SalesLead.poc1_name.ilike(f"%{search}%"),
+                models.SalesLead.poc2_name.ilike(f"%{search}%"),
+            )
+        )
+    rows = q.order_by(models.SalesLead.updated_at.desc().nullslast(), models.SalesLead.created_at.desc()).all()
+    return [_lead_out(r) for r in rows]
+
+
+@app.post("/api/sales/leads")
+def create_lead(payload: LeadCreate, db: Session = Depends(get_db)):
+    lead = models.SalesLead(
+        brand_name=payload.brand_name,
+        category=payload.category,
+        website=payload.website,
+        source=payload.source,
+        poc1_name=payload.poc1_name,
+        poc1_email=payload.poc1_email,
+        poc1_phone=payload.poc1_phone,
+        poc1_designation=payload.poc1_designation,
+        poc2_name=payload.poc2_name,
+        poc2_email=payload.poc2_email,
+        poc2_phone=payload.poc2_phone,
+        poc2_designation=payload.poc2_designation,
+        stage=payload.stage,
+        priority=payload.priority,
+        assigned_to=payload.assigned_to,
+        next_followup=payload.next_followup,
+        # This DB's sales_leads.created_at has no server default (SQLite quirk),
+        # so set it explicitly - otherwise the insert hits a NOT NULL violation.
+        created_at=datetime.now(),
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    return _lead_out(lead)
+
+
+@app.put("/api/sales/leads/{lead_id}")
+def update_lead(lead_id: int, payload: LeadUpdate, db: Session = Depends(get_db)):
+    lead = db.get(models.SalesLead, lead_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(lead, field, value)
+    lead.updated_at = datetime.now()
+    db.commit()
+    db.refresh(lead)
+    return _lead_out(lead)
+
+
+@app.delete("/api/sales/leads/{lead_id}")
+def delete_lead(lead_id: int, db: Session = Depends(get_db)):
+    lead = db.get(models.SalesLead, lead_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    db.query(models.SalesActivity).filter(models.SalesActivity.lead_id == lead_id).delete()
+    db.delete(lead)
+    db.commit()
+    return {"deleted": True}
+
+
+@app.get("/api/sales/leads/{lead_id}/activities")
+def list_activities(lead_id: int, db: Session = Depends(get_db)):
+    lead = db.get(models.SalesLead, lead_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    rows = (
+        db.query(models.SalesActivity)
+        .filter(models.SalesActivity.lead_id == lead_id)
+        .order_by(models.SalesActivity.activity_date.desc())
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "lead_id": a.lead_id,
+            "activity_type": a.activity_type,
+            "activity_date": a.activity_date,
+            "summary": a.summary,
+            "outcome": a.outcome,
+            "next_action": a.next_action,
+            "logged_by": a.logged_by,
+            "created_at": a.created_at,
+        }
+        for a in rows
+    ]
+
+
+@app.post("/api/sales/leads/{lead_id}/activities")
+def create_activity(lead_id: int, payload: ActivityCreate, db: Session = Depends(get_db)):
+    lead = db.get(models.SalesLead, lead_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    if payload.activity_type not in ACTIVITY_TYPES:
+        raise HTTPException(422, f"Unknown activity type: {payload.activity_type}")
+    activity = models.SalesActivity(
+        lead_id=lead_id,
+        activity_type=payload.activity_type,
+        activity_date=payload.activity_date or datetime.now(),
+        summary=payload.summary,
+        outcome=payload.outcome,
+        next_action=payload.next_action,
+        logged_by=payload.logged_by,
+        created_at=datetime.now(),
+    )
+    db.add(activity)
+    lead.last_contact_date = activity.activity_date
+    if payload.next_followup:
+        lead.next_followup = payload.next_followup
+
+    # Auto-advance the pipeline from the activity itself, so a lead you've
+    # actually reached shows up under "Contacted" without a manual stage change.
+    # This only ever moves a lead FORWARD - it never pulls one back.
+    OUTREACH = {"call", "email_sent", "whatsapp", "meeting"}
+    if payload.activity_type == "reply_received" and lead.stage in (
+        "new_lead", "contacted", "no_response"
+    ):
+        # They wrote back - that's a response, wherever they were before.
+        lead.stage = "responded"
+    elif payload.activity_type in OUTREACH and lead.stage in ("new_lead", "no_response"):
+        # First real outreach (or a fresh attempt after silence) = contacted.
+        lead.stage = "contacted"
+
+    lead.updated_at = datetime.now()
+    db.commit()
+    db.refresh(activity)
+    return {
+        "id": activity.id,
+        "lead_id": activity.lead_id,
+        "activity_type": activity.activity_type,
+        "activity_date": activity.activity_date,
+        "summary": activity.summary,
+        "outcome": activity.outcome,
+        "next_action": activity.next_action,
+        "logged_by": activity.logged_by,
+        "created_at": activity.created_at,
+        "stage": lead.stage,
+    }
+
+
+@app.get("/api/sales/team")
+def sales_team():
+    return SALES_TEAM
+
+
+@app.get("/api/sales/sources")
+def sales_sources():
+    return LEAD_SOURCES

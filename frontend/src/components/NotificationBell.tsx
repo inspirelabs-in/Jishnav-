@@ -14,10 +14,11 @@ const STATUS_LABEL: Record<Notification["status"], string> = {
   resolved: "Resolved",
 };
 
-function levelLabel(level: number): string {
-  if (level <= 1) return "Level 1 · Handler";
-  if (level === 2) return "Level 2 · + Manager";
-  return `Level ${level} · + Founders Office`;
+/** Who a case currently sits with, without exposing raw "level N" numbers. */
+function routeLabel(stage: number): string {
+  if (stage <= 1) return "With handler";
+  if (stage === 2) return "Escalated to Manager";
+  return "Escalated to Founders Office";
 }
 
 function seenKey(user: string) {
@@ -37,9 +38,12 @@ function saveSeen(user: string, ids: Set<number>) {
 export default function NotificationBell({
   user,
   version,
+  openSignal = 0,
 }: {
   user: string;
   version: number;
+  /** Incrementing this from a parent (e.g. a landing chip) opens the drawer. */
+  openSignal?: number;
 }) {
   const [items, setItems] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
@@ -51,6 +55,9 @@ export default function NotificationBell({
   const [search, setSearch] = useState("");
   const [filterYear, setFilterYear] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
+  // Dev-only "time machine": preview the flow as if today were `simDate`.
+  const devMode = import.meta.env.DEV;
+  const [simDate, setSimDate] = useState<string>("");
   const toast = useToast();
 
   const handlerRole = isHandler(user);
@@ -58,14 +65,14 @@ export default function NotificationBell({
 
   const load = useCallback(async () => {
     try {
-      setItems(await api.getNotifications(user));
+      setItems(await api.getNotifications(user, devMode && simDate ? simDate : undefined));
       setLoadError(null);
     } catch (e) {
       setLoadError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, devMode, simDate]);
 
   useEffect(() => {
     setLoading(true);
@@ -73,6 +80,15 @@ export default function NotificationBell({
     const t = window.setInterval(load, 60_000);
     return () => window.clearInterval(t);
   }, [load, version]);
+
+  function shiftSim(months: number) {
+    const base = simDate ? new Date(simDate + "T00:00:00") : new Date();
+    base.setDate(1);
+    base.setMonth(base.getMonth() + months);
+    const y = base.getFullYear();
+    const m = String(base.getMonth() + 1).padStart(2, "0");
+    setSimDate(`${y}-${m}-01`);
+  }
 
   // Escape closes the drawer.
   useEffect(() => {
@@ -120,6 +136,12 @@ export default function NotificationBell({
     saveSeen(user, s);
     setSeenTick((t) => t + 1);
   }
+
+  // Open when a parent bumps the signal (e.g. the landing "need action" chip).
+  useEffect(() => {
+    if (openSignal > 0) openDrawer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSignal]);
 
   async function sendReason(id: number) {
     const reason = (reasonDrafts[id] ?? "").trim();
@@ -182,7 +204,9 @@ export default function NotificationBell({
         )}
 
         <div className="notif-card-foot">
-          <span className="level-chip">{levelLabel(n.escalation_level)}</span>
+          <span className={`route-chip route-${Math.min(n.escalation_level, 3)}`}>
+            {routeLabel(n.escalation_level)}
+          </span>
         </div>
 
         {canSubmitReason && (
@@ -254,6 +278,24 @@ export default function NotificationBell({
             }}
           />
         </div>
+
+        {devMode && (
+          <div className="notif-timemachine">
+            <span className="tm-label" title="Dev-only: preview the escalation flow as if it were a future month">
+              🕑 Time machine
+            </span>
+            <button className="btn btn-sm" onClick={() => shiftSim(-1)} aria-label="Back one month">−1 mo</button>
+            <span className="tm-now">
+              {simDate
+                ? new Date(simDate + "T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" })
+                : "Real date"}
+            </span>
+            <button className="btn btn-sm" onClick={() => shiftSim(1)} aria-label="Forward one month">+1 mo</button>
+            {simDate && (
+              <button className="btn btn-sm" onClick={() => setSimDate("")} aria-label="Reset to real date">Reset</button>
+            )}
+          </div>
+        )}
 
         <div className="notif-drawer-body">
           {loading && (

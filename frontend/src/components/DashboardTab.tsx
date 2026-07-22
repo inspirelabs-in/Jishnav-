@@ -1,197 +1,202 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, formatMonthYearISO, formatRailwayTime } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { api, formatRailwayTime } from "../api";
 import { downloadCsv } from "../csv";
 import { useToast } from "../Toast";
-import { HANDLERS, isPrivileged, type EditLog, type Merchant, type StatusEvent } from "../types";
-import { DownloadIcon, ExternalLinkIcon, HandlerAvatar, Pagination } from "./Icons";
-import PeriodPicker from "./PeriodPicker";
+import { HANDLERS, isHandler, type Merchant } from "../types";
+import { DownloadIcon, Pagination } from "./Icons";
+import { FilterField, iso1, isoLast, RangeSelect, type MY } from "./dvFilters";
+import MerchantHistoryModal, { MERCHANT_FIELD_LABELS, fmtMerchantVal } from "./MerchantHistoryModal";
 
-const FIELD_LABELS: Record<string, string> = {
-  entry_date: "Period", clicks: "Clicks", sales: "Sales",
-  cr: "CR %", gmv: "GMV", revenue: "Revenue", remarks: "Remarks",
-};
-
-/** entry_date diffs are stored as ISO dates but shown month/year only. */
-function fmtChangeValue(field: string, v: unknown): string {
-  if (v === null || v === undefined) return "-";
-  if (field === "entry_date") return formatMonthYearISO(String(v));
-  return String(v);
+/** Left-aligned value; a missing value shows a centered dash instead. */
+function Cell({ v }: { v: unknown }) {
+  if (v === null || v === undefined || v === "" || v === 0) return <span className="mi-null">-</span>;
+  return <>{String(v)}</>;
 }
 
+/** Merchant Info: every brand's metadata in one table, with a per-merchant edit
+ *  history modal, and handler / brand filters plus a history-period export. */
 export default function DashboardTab({ user }: { user: string }) {
-  const privileged = isPrivileged(user);
+  const now = useMemo(() => new Date(), []);
+  const yearOptions = useMemo(() => {
+    const y = now.getFullYear();
+    return [y, y - 1, y - 2, y - 3];
+  }, [now]);
+
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [handler, setHandler] = useState("All");
-  const [search, setSearch] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+
+  // ---- filters
+  const [handlerSel, setHandlerSel] = useState<string[]>(isHandler(user) ? [user] : []);
+  const [handlerMulti, setHandlerMulti] = useState(false);
+  const [allHandlers, setAllHandlers] = useState(false);
+  const [brandSel, setBrandSel] = useState<string[]>([]);
+  const [brandMulti, setBrandMulti] = useState(false);
+
+  // ---- history period (drives the history CSV; default Jan last year -> now)
+  const [from, setFrom] = useState<MY>({ m: 1, y: now.getFullYear() - 1 });
+  const [to, setTo] = useState<MY>({ m: now.getMonth() + 1, y: now.getFullYear() });
+
+  const [historyMerchant, setHistoryMerchant] = useState<Merchant | null>(null);
+  const [mPage, setMPage] = useState(1);
+  const [downloadingHistory, setDownloadingHistory] = useState(false);
   const toast = useToast();
 
-  // One unified "Change history" combining entry edits AND revenue-status flips.
-  const [editLogs, setEditLogs] = useState<EditLog[]>([]);
-  const [events, setEvents] = useState<StatusEvent[]>([]);
-  const [chSearch, setChSearch] = useState("");
-  const [chYear, setChYear] = useState("");
-  const [chMonth, setChMonth] = useState("");
-  const chTimer = useRef<number>();
-
-  // Handlers only ever see their own book; privileged pick via the dropdown.
-  const effectiveOwner = privileged ? handler : user;
-
   useEffect(() => {
-    window.clearTimeout(chTimer.current);
-    chTimer.current = window.setTimeout(() => {
-      const merchant = chSearch.trim() || undefined;
-      api.listEditLogs({ owner: effectiveOwner, merchant }).then(setEditLogs).catch(() => setEditLogs([]));
-      api.statusHistory({ owner: effectiveOwner, merchant }).then(setEvents).catch(() => setEvents([]));
-    }, 250);
-    return () => window.clearTimeout(chTimer.current);
-  }, [effectiveOwner, chSearch, reloadKey]);
-
-  // Merge both event kinds into one time-sorted list.
-  const changeRows = useMemo(() => {
-    const rows: {
-      key: string; type: "Edit" | "Status"; merchant_id: number; merchant_name: string;
-      by: string; when: string; change: string;
-    }[] = [];
-    for (const l of editLogs) {
-      rows.push({
-        key: `e${l.id}`, type: "Edit", merchant_id: l.merchant_id, merchant_name: l.merchant_name,
-        by: l.edited_by, when: l.edited_at,
-        change: Object.entries(l.changes)
-          .map(([f, ch]) => `${FIELD_LABELS[f] ?? f}: ${fmtChangeValue(f, ch.old)} → ${fmtChangeValue(f, ch.new)}`)
-          .join(", "),
-      });
-    }
-    for (const ev of events) {
-      rows.push({
-        key: `s${ev.merchant_id}-${ev.date}-${ev.to_status}`, type: "Status",
-        merchant_id: ev.merchant_id, merchant_name: ev.merchant_name,
-        by: ev.changed_by, when: ev.date,
-        change: `${ev.from_status} → ${ev.to_status}`,
-      });
-    }
-    return rows.sort((a, b) => new Date(b.when).getTime() - new Date(a.when).getTime());
-  }, [editLogs, events]);
-
-  const chYearOptions = useMemo(() => {
-    const ys = new Set<number>();
-    for (const r of changeRows) ys.add(new Date(r.when).getFullYear());
-    ys.add(new Date().getFullYear());
-    return [...ys].sort((a, b) => b - a);
-  }, [changeRows]);
-
-  const filteredChanges = useMemo(() => {
-    if (!chYear) return changeRows;
-    return changeRows.filter((r) => {
-      const d = new Date(r.when);
-      if (d.getFullYear() !== Number(chYear)) return false;
-      if (chMonth && d.getMonth() + 1 !== Number(chMonth)) return false;
-      return true;
-    });
-  }, [changeRows, chYear, chMonth]);
-
-  function exportChangesCsv() {
-    if (filteredChanges.length === 0) {
-      toast("Nothing to export.", "error");
-      return;
-    }
-    downloadCsv(`cr-change-history-${effectiveOwner === "All" ? "all" : effectiveOwner}.csv`, [
-      ["Merchant", "MerchantID", "Type", "Change", "By", "When"],
-      ...filteredChanges.map((r) => [
-        r.merchant_name, r.merchant_id, r.type, r.change, r.by, formatRailwayTime(r.when),
-      ]),
-    ]);
-    toast(`Exported ${filteredChanges.length} change${filteredChanges.length === 1 ? "" : "s"}`);
-  }
+    setHandlerSel(isHandler(user) ? [user] : []);
+    setAllHandlers(false);
+    setHandlerMulti(false);
+  }, [user]);
 
   useEffect(() => {
     setLoading(true);
     api
-      .listMerchants(effectiveOwner)
-      .then((m) => {
-        setMerchants(m);
-        setError(null);
-      })
+      .listMerchants()
+      .then((m) => { setMerchants(m); setError(null); })
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
-  }, [effectiveOwner, reloadKey]);
+  }, [reloadKey]);
+
+  const activeHandlers = allHandlers ? [] : handlerSel;
+
+  // Brand options track the chosen handler(s) so suggestions stay relevant.
+  const brandOptions = useMemo(() => {
+    const scope = activeHandlers.length
+      ? merchants.filter((m) => activeHandlers.includes(m.owner ?? ""))
+      : merchants;
+    return scope.map((m) => m.merchant_name).sort((a, b) => a.localeCompare(b));
+  }, [merchants, activeHandlers]);
 
   const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = q
-      ? merchants.filter((m) => m.merchant_name.toLowerCase().includes(q))
-      : merchants;
-    return [...list].sort((a, b) => a.merchant_name.localeCompare(b.merchant_name));
-  }, [merchants, search]);
+    return merchants
+      .filter((m) => (activeHandlers.length ? activeHandlers.includes(m.owner ?? "") : true))
+      .filter((m) => (brandSel.length ? brandSel.includes(m.merchant_name) : true))
+      .sort((a, b) => a.merchant_name.localeCompare(b.merchant_name));
+  }, [merchants, activeHandlers, brandSel]);
 
-  const PER_PAGE = 10;
-  const [mPage, setMPage] = useState(1);
-  const [chPage, setChPage] = useState(1);
-  useEffect(() => { setMPage(1); }, [search, handler]);
-  useEffect(() => { setChPage(1); }, [chSearch, chYear, chMonth]);
-  const shownRows = rows.slice((mPage - 1) * PER_PAGE, mPage * PER_PAGE);
-  const shownChanges = filteredChanges.slice((chPage - 1) * PER_PAGE, chPage * PER_PAGE);
+  const PER_PAGE = 12;
+  useEffect(() => { setMPage(1); }, [handlerSel, allHandlers, brandSel]);
+  const shown = rows.slice((mPage - 1) * PER_PAGE, mPage * PER_PAGE);
 
-  function exportCsv() {
-    if (rows.length === 0) {
-      toast("Nothing to export.", "error");
-      return;
-    }
-    downloadCsv(`cr-dashboard-${effectiveOwner === "All" ? "all" : effectiveOwner}.csv`, [
-      ["MerchantID", "MerchantName", "URL", "RevenueStatus", "DealType", "Payout", "Reporting", "Handler"],
+  function exportTableCsv() {
+    if (rows.length === 0) return toast("Nothing to export.", "error");
+    downloadCsv("merchant-info.csv", [
+      [
+        "Merchant ID", "Merchant Name", "Breadcrumb1 Name", "Breadcrumb2 Name",
+        "Affiliate ID", "Affiliate Name", "Reporting", "Deal Type", "Payout", "Revenue Status",
+      ],
       ...rows.map((m) => [
-        m.merchant_id, m.merchant_name, m.url, m.revenue_status,
-        m.deal_type, m.payout, m.reporting, m.owner,
+        m.merchant_id, m.merchant_name, m.breadcrumb1_name ?? "", m.breadcrumb2_name ?? "",
+        m.affiliate_id || "", m.affiliate_name ?? "", m.reporting ?? "", m.deal_type ?? "",
+        m.payout ?? "", m.revenue_status,
       ]),
     ]);
     toast(`Exported ${rows.length} merchant${rows.length === 1 ? "" : "s"}`);
   }
 
+  async function exportHistoryCsv() {
+    if (rows.length === 0) return toast("No merchants in view to export history for.", "error");
+    setDownloadingHistory(true);
+    try {
+      const dFrom = iso1(from);
+      const dTo = isoLast(to);
+      const ids = new Set(rows.map((m) => m.merchant_id));
+      const [logs, evs] = await Promise.all([
+        api.listMerchantEditLogs({ date_from: dFrom, date_to: dTo, limit: 5000 }),
+        api.statusHistory({}),
+      ]);
+      const out: { mid: number; name: string; type: string; field: string; old: string; new: string; by: string; when: string }[] = [];
+      for (const l of logs) {
+        if (!ids.has(l.merchant_id)) continue;
+        for (const [f, ch] of Object.entries(l.changes)) {
+          out.push({
+            mid: l.merchant_id, name: l.merchant_name, type: "Edit",
+            field: MERCHANT_FIELD_LABELS[f] ?? f, old: fmtMerchantVal(ch.old), new: fmtMerchantVal(ch.new),
+            by: l.edited_by, when: l.edited_at,
+          });
+        }
+      }
+      const fromT = new Date(`${dFrom}T00:00:00`).getTime();
+      const toT = new Date(`${dTo}T23:59:59`).getTime();
+      for (const ev of evs) {
+        if (!ids.has(ev.merchant_id)) continue;
+        const t = new Date(ev.date).getTime();
+        if (t < fromT || t > toT) continue;
+        out.push({
+          mid: ev.merchant_id, name: ev.merchant_name, type: "Status",
+          field: "Revenue Status", old: ev.from_status, new: ev.to_status,
+          by: ev.changed_by, when: ev.date,
+        });
+      }
+      out.sort((a, b) => new Date(b.when).getTime() - new Date(a.when).getTime());
+      if (out.length === 0) return toast("No edit history in this period.", "error");
+      downloadCsv("merchant-edit-history.csv", [
+        ["Merchant ID", "Merchant Name", "Type", "Field", "Old Value", "New Value", "Changed By", "When"],
+        ...out.map((r) => [r.mid, r.name, r.type, r.field, r.old, r.new, r.by, formatRailwayTime(r.when)]),
+      ]);
+      toast(`Exported ${out.length} change${out.length === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setDownloadingHistory(false);
+    }
+  }
+
   return (
     <>
-      <div className="card">
-        <div className="dash-head">
-          <div>
-            <h3 style={{ margin: 0 }}>
-              {privileged
-                ? handler === "All"
-                  ? "All merchants"
-                  : `${handler}'s merchants`
-                : "My merchants"}
-            </h3>
-            <p className="card-sub" style={{ margin: "4px 0 0" }}>
-              {rows.length} merchant{rows.length === 1 ? "" : "s"}
-              {privileged ? "" : `, handled by ${user}`}
-            </p>
+      {/* ---------------------------------------------- filters --- */}
+      <div className="card dv-filters">
+        <div className="dv-filter-grid dv-grid-2">
+          <FilterField
+            label="Handler"
+            options={HANDLERS}
+            selected={handlerSel}
+            onChange={setHandlerSel}
+            multi={handlerMulti}
+            onMulti={(on) => { setHandlerMulti(on); if (!on && handlerSel.length > 1) setHandlerSel(handlerSel.slice(0, 1)); }}
+            toggleLabel="Multiple handlers"
+            singlePlaceholder="Search a handler"
+            multiPlaceholder="Add handlers to view"
+            clearQueryOnFocus
+            all={allHandlers}
+            onAll={setAllHandlers}
+            allLabel="All handlers"
+          />
+          <FilterField
+            label="Brand"
+            options={brandOptions}
+            selected={brandSel}
+            onChange={setBrandSel}
+            multi={brandMulti}
+            onMulti={(on) => { setBrandMulti(on); if (!on && brandSel.length > 1) setBrandSel(brandSel.slice(0, 1)); }}
+            toggleLabel="Multiple brands"
+            singlePlaceholder="Search a brand"
+            multiPlaceholder="Add brands to view"
+            showClear
+          />
+        </div>
+
+        <div className="dv-actions">
+          <div className="dv-date">
+            <span className="dv-date-label">History period</span>
+            <RangeSelect from={from} to={to} years={yearOptions} onFrom={setFrom} onTo={setTo} />
           </div>
-          <div className="dash-tools">
-            <input
-              className="dash-search"
-              placeholder="Search merchant"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              aria-label="Search merchant"
-            />
-            {privileged && (
-              <div className="mini-field">
-                <label htmlFor="dash-handler">Handler</label>
-                <select id="dash-handler" value={handler} onChange={(e) => setHandler(e.target.value)}>
-                  <option>All</option>
-                  {HANDLERS.map((h) => (
-                    <option key={h}>{h}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <button className="btn" onClick={exportCsv} title="Download this table as CSV">
+          <div className="mi-downloads">
+            <button className="btn btn-sm" onClick={exportTableCsv} disabled={rows.length === 0} title="Download the merchant table as CSV">
               <DownloadIcon />
-              Export CSV
+              Download CSV
+            </button>
+            <button className="btn btn-sm" onClick={exportHistoryCsv} disabled={downloadingHistory || rows.length === 0} title="Download the edit history for the selected period as CSV">
+              <DownloadIcon />
+              {downloadingHistory ? "Preparing…" : "Download history"}
             </button>
           </div>
         </div>
+      </div>
 
+      {/* ---------------------------------------------- table --- */}
+      <div className="card mi-card">
         {error && !loading && (
           <div className="empty-state">
             Couldn't load merchants: {error}{" "}
@@ -208,63 +213,52 @@ export default function DashboardTab({ user }: { user: string }) {
         )}
 
         {!loading && !error && (
-          <div className="table-wrap cmp-wrap">
-            <table className="data dash-table">
+          <div className="table-wrap mi-scroll">
+            <table className="data mi-table">
               <thead>
                 <tr>
-                  <th className="rank-col">#</th>
-                  <th>Merchant</th>
-                  <th>Link</th>
-                  <th>Status</th>
-                  <th>Deal type</th>
-                  <th className="num">Payout</th>
+                  <th>Merchant ID</th>
+                  <th>Merchant Name</th>
+                  <th>Breadcrumb1 Name</th>
+                  <th>Breadcrumb2 Name</th>
+                  <th>Affiliate ID</th>
+                  <th>Affiliate Name</th>
                   <th>Reporting</th>
-                  {privileged && <th>Handler</th>}
+                  <th>Deal Type</th>
+                  <th>Payout</th>
+                  <th>Revenue Status</th>
+                  <th>History</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={privileged ? 8 : 7} className="muted" style={{ textAlign: "center", padding: 24 }}>
-                      No merchants match.
+                    <td colSpan={11} className="muted" style={{ textAlign: "center", padding: 24 }}>
+                      No merchants match these filters.
                     </td>
                   </tr>
                 )}
-                {shownRows.map((m, i) => (
-                  <tr key={m.merchant_id} className="cmp-row" style={{ animationDelay: `${Math.min(i, 12) * 35}ms` }}>
-                    <td className="rank-col mono muted">{(mPage - 1) * PER_PAGE + i + 1}</td>
-                    <td>
-                      <div className="dash-merchant">
-                        <b>{m.merchant_name}</b>
-                        <span className="muted mono">#{m.merchant_id}</span>
-                      </div>
-                    </td>
-                    <td>
-                      {m.url ? (
-                        <a className="url-link" href={m.url} target="_blank" rel="noreferrer" title={m.url}>
-                          <ExternalLinkIcon />
-                          {m.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
-                        </a>
-                      ) : (
-                        <span className="muted">-</span>
-                      )}
-                    </td>
+                {shown.map((m) => (
+                  <tr key={m.merchant_id}>
+                    <td className="mono">{m.merchant_id}</td>
+                    <td><b>{m.merchant_name}</b></td>
+                    <td><Cell v={m.breadcrumb1_name} /></td>
+                    <td><Cell v={m.breadcrumb2_name} /></td>
+                    <td className="mono"><Cell v={m.affiliate_id} /></td>
+                    <td><Cell v={m.affiliate_name} /></td>
+                    <td><Cell v={m.reporting} /></td>
+                    <td><Cell v={m.deal_type} /></td>
+                    <td><Cell v={m.payout} /></td>
                     <td>
                       <span className={`rev-chip ${m.revenue_status === "Non-revenue" ? "rev-off" : "rev-on"}`}>
                         {m.revenue_status}
                       </span>
                     </td>
-                    <td>{m.deal_type ?? "-"}</td>
-                    <td className="num">{m.payout ?? "-"}</td>
-                    <td>{m.reporting ?? "-"}</td>
-                    {privileged && (
-                      <td>
-                        <span className="owner-cell">
-                          <HandlerAvatar name={m.owner} size={22} />
-                          {m.owner ?? "-"}
-                        </span>
-                      </td>
-                    )}
+                    <td>
+                      <button className="history-link" onClick={() => setHistoryMerchant(m)}>
+                        History
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -274,74 +268,9 @@ export default function DashboardTab({ user }: { user: string }) {
         )}
       </div>
 
-      <div className="card">
-        <div className="dash-head">
-          <div>
-            <h3 style={{ margin: 0 }}>Edit History</h3>
-            <p className="card-sub" style={{ margin: "4px 0 0" }}>
-              Every edit to an entry and every Revenue / Non-revenue switch, in one place.
-            </p>
-          </div>
-          <div className="dash-tools">
-            <input
-              className="dash-search"
-              placeholder="Search merchant"
-              value={chSearch}
-              onChange={(e) => setChSearch(e.target.value)}
-              aria-label="Search change history by merchant"
-            />
-            <PeriodPicker
-              year={chYear}
-              month={chMonth}
-              yearOptions={chYearOptions}
-              onChange={(y, m) => {
-                setChYear(y);
-                setChMonth(m);
-              }}
-            />
-            <button className="btn" onClick={exportChangesCsv} title="Download this history as CSV">
-              <DownloadIcon />
-              Export CSV
-            </button>
-          </div>
-        </div>
-
-        {filteredChanges.length === 0 ? (
-          <div className="empty-state" style={{ padding: "28px 0" }}>
-            No changes{chSearch ? ` for "${chSearch}"` : ""}{chYear ? " in this period" : ""} yet.
-          </div>
-        ) : (
-          <div className="table-wrap cmp-wrap">
-            <table className="data change-table">
-              <thead>
-                <tr>
-                  <th>Merchant</th>
-                  <th>Type</th>
-                  <th>Change</th>
-                  <th>By</th>
-                  <th>When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shownChanges.map((r, i) => (
-                  <tr key={r.key} className="cmp-row" style={{ animationDelay: `${Math.min(i, 14) * 28}ms` }}>
-                    <td><b>{r.merchant_name}</b> <span className="muted mono">#{r.merchant_id}</span></td>
-                    <td>
-                      <span className={`type-chip ${r.type === "Status" ? "type-status" : "type-edit"}`}>
-                        {r.type}
-                      </span>
-                    </td>
-                    <td className="change-cell">{r.change}</td>
-                    <td>{r.by}</td>
-                    <td className="muted mono">{formatRailwayTime(r.when)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pagination page={chPage} total={filteredChanges.length} perPage={PER_PAGE} noun="changes" onChange={setChPage} />
-          </div>
-        )}
-      </div>
+      {historyMerchant && (
+        <MerchantHistoryModal merchant={historyMerchant} onClose={() => setHistoryMerchant(null)} />
+      )}
     </>
   );
 }

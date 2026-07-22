@@ -1,35 +1,67 @@
 import { useEffect, useState } from "react";
 import AnalyticsTab from "./components/AnalyticsTab";
 import BrandTransferTab from "./components/BrandTransferTab";
+import CSLandingPage, { type CSTab } from "./components/CSLandingPage";
 import DashboardTab from "./components/DashboardTab";
 import DataEntryTab from "./components/DataEntryTab";
 import DeliveryTab from "./components/DeliveryTab";
 import NotificationBell from "./components/NotificationBell";
+import SalesLandingPage from "./components/SalesLandingPage";
+import SalesTab from "./components/SalesTab";
 import { ToastProvider } from "./Toast";
-import { isDelivery, isPrivileged, USERS } from "./types";
+import { isDelivery, isPrivileged, isSales, USERS, userLabel } from "./types";
 
-type TabKey = "entry" | "analytics" | "dashboard" | "transfer" | "delivery";
+type TabKey =
+  | "home"
+  | "entry"
+  | "analytics"
+  | "dashboard"
+  | "transfer"
+  | "delivery"
+  | "saleshome"
+  | "sales";
 
-const BASE_TABS: { key: TabKey; label: string }[] = [
+const HOME_TAB: { key: TabKey; label: string } = { key: "home", label: "Home" };
+
+// CS feature tabs (the landing sits in front of these).
+const CS_FEATURE_TABS: { key: TabKey; label: string }[] = [
   { key: "entry", label: "Data Entry" },
-  { key: "analytics", label: "Analytics" },
-  { key: "dashboard", label: "Dashboard" },
+  { key: "analytics", label: "Data View" },
+  { key: "dashboard", label: "Merchant Info" },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState<TabKey>("entry");
+  const [tab, setTab] = useState<TabKey>("home");
   const [user, setUser] = useState("Swati");
   // bump to force notification refetch after entries are saved
   const [notifVersion, setNotifVersion] = useState(0);
+  // Deep-link state for the Sales landing -> pipeline (pre-applied filters).
+  // A bump on salesNav remounts SalesTab so the filters re-apply each jump.
+  const [salesInit, setSalesInit] = useState<{ stage?: string; priority?: string }>({});
+  const [salesNav, setSalesNav] = useState(0);
+  // Bumped when the landing asks to open the notification drawer.
+  const [notifOpenSignal, setNotifOpenSignal] = useState(0);
 
   const privileged = isPrivileged(user);
   const delivery = isDelivery(user);
-  // The Delivery role has a single focused tab; everyone else gets the workspace.
+  const sales = isSales(user);
+  // Each role gets its own tab set. Handlers / Manager / Founders land on the CS
+  // Home; Sales1 / Sales2 land on the Sales Home; Delivery goes straight to work.
   const tabs: { key: TabKey; label: string }[] = delivery
     ? [{ key: "delivery", label: "Delivery Queue" }]
-    : privileged
-      ? [...BASE_TABS, { key: "transfer", label: "Brand Transfer" }]
-      : BASE_TABS;
+    : sales
+      ? [{ key: "saleshome", label: "Home" }, { key: "sales", label: "Sales Pipeline" }]
+      : privileged
+        ? [HOME_TAB, ...CS_FEATURE_TABS, { key: "transfer", label: "Brand Transfer" }]
+        : [HOME_TAB, ...CS_FEATURE_TABS];
+
+  function openSales(init?: { stage?: string; priority?: string }) {
+    if (init) {
+      setSalesInit(init);
+      setSalesNav((n) => n + 1);
+    }
+    setTab("sales");
+  }
 
   // If the active tab is not available for this role, fall back to the first one.
   useEffect(() => {
@@ -57,12 +89,12 @@ export default function App() {
           ))}
         </nav>
         <div className="header-right">
-          <NotificationBell user={user} version={notifVersion} />
+          <NotificationBell user={user} version={notifVersion} openSignal={notifOpenSignal} />
           <div className="user-select">
-            <span className="user-avatar">{user[0]}</span>
+            <span className="user-avatar">{userLabel(user)[0]}</span>
             <select value={user} onChange={(e) => setUser(e.target.value)} aria-label="Acting as">
               {USERS.map((u) => (
-                <option key={u}>{u}</option>
+                <option key={u} value={u}>{userLabel(u)}</option>
               ))}
             </select>
           </div>
@@ -70,6 +102,16 @@ export default function App() {
       </header>
 
       <main className="page">
+        {tab === "home" && !sales && !delivery && (
+          <CSLandingPage
+            user={user}
+            onNavigate={(t: CSTab) => setTab(t)}
+            onOpenNotifications={() => setNotifOpenSignal((s) => s + 1)}
+          />
+        )}
+        {tab === "saleshome" && sales && (
+          <SalesLandingPage user={user} onOpen={openSales} />
+        )}
         {tab === "entry" && (
           <DataEntryTab user={user} onDataChanged={() => setNotifVersion((v) => v + 1)} />
         )}
@@ -79,6 +121,14 @@ export default function App() {
           <BrandTransferTab user={user} onDataChanged={() => setNotifVersion((v) => v + 1)} />
         )}
         {tab === "delivery" && delivery && <DeliveryTab user={user} />}
+        {tab === "sales" && sales && (
+          <SalesTab
+            key={salesNav}
+            user={user}
+            initialStage={salesInit.stage}
+            initialPriority={salesInit.priority}
+          />
+        )}
       </main>
     </ToastProvider>
   );

@@ -1,13 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import "@fontsource/archivo/500.css";
-import "@fontsource/archivo/600.css";
-import "@fontsource/archivo/700.css";
-import "@fontsource/archivo/800.css";
-import "@fontsource/ibm-plex-mono/500.css";
-import "@fontsource/ibm-plex-mono/600.css";
+// Inter, variable — one face, three levers (size / weight / colour) do the work.
+import "@fontsource-variable/inter";
 import App from "./App";
-import "./styles.css";
+// Order matters: tokens -> base -> components -> shell -> screens.
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/components.css";
+import "./styles/shell.css";
+import "./styles/screens.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

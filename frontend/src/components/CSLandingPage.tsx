@@ -68,17 +68,46 @@ interface Totals {
   revenue: number;
 }
 
+/** The landing's numbers, cached per user so a reload (e.g. Chrome discarding a
+ *  backgrounded tab) repaints the last-known figures instantly and revalidates
+ *  in the background, instead of flashing the skeleton. */
+interface HomeSnapshot {
+  mineTotals: Totals;
+  allTotals: Totals;
+  brands: number;
+  allBrands: number;
+  reminders: number;
+}
+const homeKey = (u: string) => `cr.home.${u}`;
+function readHome(u: string): HomeSnapshot | null {
+  try {
+    const s = sessionStorage.getItem(homeKey(u));
+    return s ? (JSON.parse(s) as HomeSnapshot) : null;
+  } catch {
+    return null;
+  }
+}
+function writeHome(u: string, snap: HomeSnapshot) {
+  try {
+    sessionStorage.setItem(homeKey(u), JSON.stringify(snap));
+  } catch {
+    /* private mode / quota — the network fetch still fills the page */
+  }
+}
+
 type MetricKey = keyof Totals;
 type Kind = "count" | "money" | "pct";
 
 // Real metric colours (colour = data). `additive` metrics can be summed, so a
 // share of the whole is meaningful; CR is a rate, so it's compared instead.
+// The spotlight cards are light frosted glass, so each metric wears its darker
+// shade (readable on the light pane) — same hues as the app's light palette.
 const CM: Record<MetricKey, { label: string; color: string; kind: Kind; additive: boolean }> = {
-  clicks: { label: "Clicks", color: "#4C93F0", kind: "count", additive: true },
-  sales: { label: "Sales", color: "#25A76A", kind: "count", additive: true },
-  cr: { label: "CR", color: "#22B4CE", kind: "pct", additive: false },
-  gmv: { label: "GMV", color: "#EE9F2E", kind: "money", additive: true },
-  revenue: { label: "Revenue", color: "#A874E0", kind: "money", additive: true },
+  clicks: { label: "Clicks", color: "#2563EB", kind: "count", additive: true },
+  sales: { label: "Sales", color: "#0C9D63", kind: "count", additive: true },
+  cr: { label: "CR", color: "#C21E63", kind: "pct", additive: false },
+  gmv: { label: "GMV", color: "#C2740A", kind: "money", additive: true },
+  revenue: { label: "Revenue", color: "#7A4EE0", kind: "money", additive: true },
 };
 
 // The rotation: outcome pair first (Sales + Revenue), then the funnel-top pair
@@ -141,16 +170,31 @@ export default function CSLandingPage({
   const privileged = isPrivileged(user);
   const handler = isHandler(user);
 
-  const [mineTotals, setMineTotals] = useState<Totals | null>(null);
-  const [allTotals, setAllTotals] = useState<Totals | null>(null);
-  const [brands, setBrands] = useState(0);
-  const [allBrands, setAllBrands] = useState(0);
-  const [reminders, setReminders] = useState(0);
-  const [loaded, setLoaded] = useState(false);
+  // Seed from the per-user cache so the first paint after a reload already shows
+  // real numbers (never the skeleton) for whoever was last acting.
+  const seed = readHome(user);
+  const [mineTotals, setMineTotals] = useState<Totals | null>(seed?.mineTotals ?? null);
+  const [allTotals, setAllTotals] = useState<Totals | null>(seed?.allTotals ?? null);
+  const [brands, setBrands] = useState(seed?.brands ?? 0);
+  const [allBrands, setAllBrands] = useState(seed?.allBrands ?? 0);
+  const [reminders, setReminders] = useState(seed?.reminders ?? 0);
+  const [loaded, setLoaded] = useState(seed != null);
 
   useEffect(() => {
     let live = true;
-    setLoaded(false);
+    // If we have a cached snapshot for this user, keep showing it and revalidate
+    // silently; only drop to the skeleton when there is nothing to show yet.
+    const cached = readHome(user);
+    if (cached) {
+      setMineTotals(cached.mineTotals);
+      setAllTotals(cached.allTotals);
+      setBrands(cached.brands);
+      setAllBrands(cached.allBrands);
+      setReminders(cached.reminders);
+      setLoaded(true);
+    } else {
+      setLoaded(false);
+    }
     const ownerParam = handler ? user : undefined;
     // My book, and the whole portfolio, for the same completed month. For a
     // privileged user "mine" already is the whole book, so we reuse one call.
@@ -164,16 +208,22 @@ export default function CSLandingPage({
     ])
       .then(([ms, mine, all, notifs]) => {
         if (!live) return;
-        setBrands(ms.length);
-        setMineTotals(mine.totals as Totals);
-        setAllTotals(all.totals as Totals);
-        setAllBrands(all.by_merchant?.length ?? ms.length);
-        setReminders(
-          notifs.filter((n) =>
+        const snap: HomeSnapshot = {
+          mineTotals: mine.totals as Totals,
+          allTotals: all.totals as Totals,
+          brands: ms.length,
+          allBrands: all.by_merchant?.length ?? ms.length,
+          reminders: notifs.filter((n) =>
             ["pending", "reason_submitted", "rejected"].includes(n.status)
-          ).length
-        );
+          ).length,
+        };
+        setBrands(snap.brands);
+        setMineTotals(snap.mineTotals);
+        setAllTotals(snap.allTotals);
+        setAllBrands(snap.allBrands);
+        setReminders(snap.reminders);
         setLoaded(true);
+        writeHome(user, snap);
       })
       .catch(() => live && setLoaded(true));
     return () => {
@@ -182,12 +232,12 @@ export default function CSLandingPage({
   }, [user, handler]);
 
   const cards: { tab: CSTab; title: string; desc: string; color: string }[] = [
-    { tab: "entry", title: "Data Entry", desc: "Log this period's clicks, sales, GMV and revenue for your brands.", color: "#2E7DE0" },
-    { tab: "analytics", title: "Data View", desc: "Month-by-month performance broken down across every brand you handle.", color: "#0891B2" },
-    { tab: "dashboard", title: "Merchant Info", desc: "Each brand's details, reporting cadence and full edit history.", color: "#15804C" },
+    { tab: "entry", title: "Data Entry", desc: "Log this period's clicks, sales, GMV and revenue for your brands.", color: "#3D8BF5" },
+    { tab: "analytics", title: "Data View", desc: "Month-by-month performance broken down across every brand you handle.", color: "#12B5A5" },
+    { tab: "dashboard", title: "Merchant Info", desc: "Each brand's details, reporting cadence and full edit history.", color: "#17B978" },
   ];
   if (privileged) {
-    cards.push({ tab: "transfer", title: "Brand Transfer", desc: "Reassign a brand to another handler and keep the audit trail.", color: "#8B4FC9" });
+    cards.push({ tab: "transfer", title: "Brand Transfer", desc: "Reassign a brand to another handler and keep the audit trail.", color: "#8B6BF0" });
   }
 
   return (
@@ -195,7 +245,7 @@ export default function CSLandingPage({
       {/* ---- hero ---- */}
       <section
         className="lp-hero"
-        style={{ ["--glow-a" as string]: "#2E7DE0", ["--glow-b" as string]: "#8B4FC9" }}
+        style={{ ["--glow-a" as string]: "#FF9A5C", ["--glow-b" as string]: "#E0763C" }}
       >
         <div className="lp-hero-content">
           <span className="lp-eyebrow">GrabOn · CR Portal</span>
@@ -206,9 +256,9 @@ export default function CSLandingPage({
             <button
               className="lp-hero-chip lp-hero-chip-btn"
               onClick={() => onNavigate("analytics")}
-              title="Open Data View"
+              data-tip="Open Data View"
             >
-              <span className="lp-cdot" style={{ ["--cdot" as string]: "#4C93F0" }} />
+              <span className="lp-cdot" style={{ ["--cdot" as string]: "#3D8BF5" }} />
               <span className="lp-chip-txt">
                 {loaded ? <><span className="mono">{brands}</span> brands</> : "loading brands"}
               </span>
@@ -217,11 +267,11 @@ export default function CSLandingPage({
             <button
               className="lp-hero-chip lp-hero-chip-btn"
               onClick={onOpenNotifications}
-              title="Open notifications"
+              data-tip="Open notifications"
             >
               <span
                 className="lp-cdot"
-                style={{ ["--cdot" as string]: reminders > 0 ? "#EE9F2E" : "#25A76A" }}
+                style={{ ["--cdot" as string]: reminders > 0 ? "#E08C0C" : "#17B978" }}
               />
               <span className="lp-chip-txt">
                 {loaded

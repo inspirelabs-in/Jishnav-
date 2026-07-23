@@ -154,15 +154,24 @@ export interface AnalyticsResponse {
 
 export type Metric = "clicks" | "sales" | "gmv" | "revenue";
 
+/* ---------------------------------------------------------------------------
+ * THE METRIC PALETTE — the app's colour vocabulary.
+ *
+ * A metric always wears the same hue, everywhere: the conversion spine, the
+ * chart series, the column header dot, the filter chip, the in-cell bar and
+ * the entry-form field. Colour means "which measure is this", never decoration.
+ * These are mid-lightness hues chosen to hold up on BOTH the dark and light
+ * ground (they mirror --m-* in tokens.css).
+ * ------------------------------------------------------------------------- */
 export const METRICS: { key: Metric; label: string; color: string }[] = [
-  { key: "clicks", label: "Clicks", color: "#2E7DE0" },
-  { key: "sales", label: "Sales", color: "#188952" },
-  { key: "gmv", label: "GMV", color: "#D97706" },
-  { key: "revenue", label: "Revenue", color: "#8B4FC9" },
+  { key: "clicks", label: "Clicks", color: "#3D8BF5" },
+  { key: "sales", label: "Sales", color: "#17B978" },
+  { key: "gmv", label: "GMV", color: "#E08C0C" },
+  { key: "revenue", label: "Revenue", color: "#8B6BF0" },
 ];
 
-// CR gets its own color so it never collides with Revenue's purple.
-export const CR_COLOR = "#0891B2";
+// CR is a ratio, not a magnitude — pink keeps it distinct from every total.
+export const CR_COLOR = "#EE5C97";
 
 // -------------------------------------------------- portfolio overview ----
 export type OverviewMetric = "clicks" | "sales" | "cr" | "gmv" | "revenue";
@@ -175,11 +184,11 @@ export const OVERVIEW_METRICS: {
   color: string;
   kind: MetricKind;
 }[] = [
-  { key: "clicks", label: "Clicks", color: "#2E7DE0", kind: "count" },
-  { key: "sales", label: "Sales", color: "#188952", kind: "count" },
+  { key: "clicks", label: "Clicks", color: "#3D8BF5", kind: "count" },
+  { key: "sales", label: "Sales", color: "#17B978", kind: "count" },
   { key: "cr", label: "CR %", color: CR_COLOR, kind: "pct" },
-  { key: "gmv", label: "GMV", color: "#D97706", kind: "money" },
-  { key: "revenue", label: "Revenue", color: "#8B4FC9", kind: "money" },
+  { key: "gmv", label: "GMV", color: "#E08C0C", kind: "money" },
+  { key: "revenue", label: "Revenue", color: "#8B6BF0", kind: "money" },
 ];
 
 export interface OverviewCell {
@@ -204,13 +213,13 @@ export interface OverviewResponse {
   by_merchant: OverviewMerchantRow[];
 }
 
-// Chart chrome constants (SVG presentation attrs can't resolve CSS vars).
-// Values mirror styles.css tokens: tick = --ink-3, grid/axis/cursor = rules.
+// Chart chrome (SVG presentation attrs can't resolve CSS vars). Alpha-based
+// neutrals so the same values read correctly on the dark AND light ground.
 export const CHART_CHROME = {
-  grid: "#eef1f5",
-  axis: "#e4e7ec",
-  tick: "#667085",
-  cursor: "#c6cdd9",
+  grid: "rgba(128,140,165,0.16)",
+  axis: "rgba(128,140,165,0.28)",
+  tick: "#8A93A8",
+  cursor: "rgba(128,140,165,0.26)",
 };
 
 export const HANDLERS = ["Swati", "Yamini", "Meena"];
@@ -243,12 +252,12 @@ export function isDelivery(user: string): boolean {
 
 /** Stable colour per handler, used for avatars and transfer visuals. */
 export const HANDLER_COLORS: Record<string, string> = {
-  Swati: "#2E7DE0",
-  Yamini: "#8B4FC9",
-  Meena: "#188952",
+  Swati: "#3D8BF5",
+  Yamini: "#8B6BF0",
+  Meena: "#17B978",
 };
 export function handlerColor(name: string | null | undefined): string {
-  return (name && HANDLER_COLORS[name]) || "#667085";
+  return (name && HANDLER_COLORS[name]) || "#8A93A8";
 }
 
 // -------------------------------------------------- sales pipeline ----
@@ -256,30 +265,32 @@ export function isSales(user: string): boolean {
   return SALES_TEAM.includes(user);
 }
 
+/* Stage colour is a real taxonomy: it warms as a lead moves down the pipeline,
+ * from cold blue (new) through violet and amber to the lime of a close. */
 export const SALES_STAGES: { key: string; label: string; color: string }[] = [
-  { key: "new_lead", label: "New lead", color: "#2E7DE0" },
-  { key: "contacted", label: "Contacted", color: "#7F77DD" },
-  { key: "no_response", label: "No response", color: "#7C8AA0" },
-  { key: "responded", label: "Responded", color: "#1D9E75" },
-  { key: "negotiating", label: "Negotiating", color: "#BA7517" },
-  { key: "closed_won", label: "Closed", color: "#639922" },
-  { key: "closed_lost", label: "Declined", color: "#E24B4A" },
-  { key: "parked", label: "Parked", color: "#888780" },
+  { key: "new_lead", label: "New lead", color: "#3D8BF5" },
+  { key: "contacted", label: "Contacted", color: "#8B6BF0" },
+  { key: "no_response", label: "No response", color: "#8A93A8" },
+  { key: "responded", label: "Responded", color: "#12B5A5" },
+  { key: "negotiating", label: "Negotiating", color: "#E08C0C" },
+  { key: "closed_won", label: "Closed", color: "#7EAE12" },
+  { key: "closed_lost", label: "Declined", color: "#E8484B" },
+  { key: "parked", label: "Parked", color: "#79839B" },
 ];
 
 export const SALES_PRIORITIES: { key: string; label: string; color: string }[] = [
-  { key: "hot", label: "Hot", color: "#E24B4A" },
-  { key: "warm", label: "Warm", color: "#D97706" },
-  { key: "cold", label: "Cold", color: "#2E7DE0" },
+  { key: "hot", label: "Hot", color: "#E8484B" },
+  { key: "warm", label: "Warm", color: "#E08C0C" },
+  { key: "cold", label: "Cold", color: "#3D8BF5" },
 ];
 
 export const ACTIVITY_TYPES: { key: string; label: string; color: string }[] = [
-  { key: "call", label: "Call", color: "#7F77DD" },
-  { key: "email_sent", label: "Email sent", color: "#2E7DE0" },
-  { key: "reply_received", label: "Reply received", color: "#1D9E75" },
-  { key: "meeting", label: "Meeting", color: "#BA7517" },
-  { key: "whatsapp", label: "WhatsApp", color: "#188952" },
-  { key: "note", label: "Note", color: "#888780" },
+  { key: "call", label: "Call", color: "#8B6BF0" },
+  { key: "email_sent", label: "Email sent", color: "#3D8BF5" },
+  { key: "reply_received", label: "Reply received", color: "#12B5A5" },
+  { key: "meeting", label: "Meeting", color: "#E08C0C" },
+  { key: "whatsapp", label: "WhatsApp", color: "#17B978" },
+  { key: "note", label: "Note", color: "#79839B" },
 ];
 
 export interface SalesLead {

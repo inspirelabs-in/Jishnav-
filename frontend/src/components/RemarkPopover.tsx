@@ -64,7 +64,7 @@ export default function RemarkCell({ text }: { text: string | null }) {
         type="button"
         className={`remark-cell ${truncated ? "is-truncated" : ""}`}
         onClick={truncated ? (anchor ? close : open) : undefined}
-        title={truncated ? "Click to read the full remark" : undefined}
+        data-tip={truncated ? "Click to read the full remark" : undefined}
       >
         {text}
       </button>

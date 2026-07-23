@@ -11,25 +11,27 @@ import {
   type SalesLead,
 } from "../types";
 
+import LedgerHeader from "./shell/LedgerHeader";
+
 const SOURCES = ["Cold outreach", "Referral", "Inbound", "Event", "LinkedIn", "Other"];
 
 function stageLabel(key: string): string {
   return SALES_STAGES.find((s) => s.key === key)?.label ?? key;
 }
 function stageColor(key: string): string {
-  return SALES_STAGES.find((s) => s.key === key)?.color ?? "#888";
+  return SALES_STAGES.find((s) => s.key === key)?.color ?? "#8A93A8";
 }
 function priorityLabel(key: string): string {
   return SALES_PRIORITIES.find((p) => p.key === key)?.label ?? key;
 }
 function priorityColor(key: string): string {
-  return SALES_PRIORITIES.find((p) => p.key === key)?.color ?? "#888";
+  return SALES_PRIORITIES.find((p) => p.key === key)?.color ?? "#8A93A8";
 }
 function activityLabel(key: string): string {
   return ACTIVITY_TYPES.find((a) => a.key === key)?.label ?? key;
 }
 function activityColor(key: string): string {
-  return ACTIVITY_TYPES.find((a) => a.key === key)?.color ?? "#888";
+  return ACTIVITY_TYPES.find((a) => a.key === key)?.color ?? "#8A93A8";
 }
 
 function relativeDate(iso: string | null): string {
@@ -501,12 +503,19 @@ export default function SalesTab({
 
   return (
     <>
-      {/* ---- header + filters ---- */}
+      <LedgerHeader
+        title="Sales Pipeline"
+        description="Every lead you own, from first outreach to closed — with the full activity trail."
+        figures={[
+          { label: "Leads", value: String(leads.length) },
+          { label: "Hot", value: String(leads.filter((l) => l.priority === "hot").length) },
+          { label: "Closed", value: String(leads.filter((l) => l.stage === "closed_won").length) },
+        ]}
+        actions={<button className="btn btn-primary" onClick={openCreate}>+ Add lead</button>}
+      />
+
+      {/* ---- filters ---- */}
       <div className="sales-header">
-        <div className="sales-top-row">
-          <h3>Sales Pipeline</h3>
-          <button className="btn btn-primary" onClick={openCreate}>+ Add lead</button>
-        </div>
 
         <div className="sales-stage-pills">
           {SALES_STAGES.map((s) => (
@@ -576,7 +585,7 @@ export default function SalesTab({
                         className={`sf-draft-btn ${isValidEmail(draft.poc1_email) ? "ready" : ""}`}
                         onClick={() => openEmailFromDraft(1)}
                         disabled={!isValidEmail(draft.poc1_email)}
-                        title={isValidEmail(draft.poc1_email) ? "Draft outreach email" : "Enter a valid email to draft"}
+                        data-tip={isValidEmail(draft.poc1_email) ? "Draft outreach email" : "Enter a valid email to draft"}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
                         Draft email
@@ -605,7 +614,7 @@ export default function SalesTab({
                         className={`sf-draft-btn ${isValidEmail(draft.poc2_email) ? "ready" : ""}`}
                         onClick={() => openEmailFromDraft(2)}
                         disabled={!isValidEmail(draft.poc2_email)}
-                        title={isValidEmail(draft.poc2_email) ? "Draft outreach email" : "Enter a valid email to draft"}
+                        data-tip={isValidEmail(draft.poc2_email) ? "Draft outreach email" : "Enter a valid email to draft"}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
                         Draft email
@@ -662,7 +671,7 @@ export default function SalesTab({
                     to {emailCompose.toName ? <b>{emailCompose.toName}</b> : null} <span className="mono">{emailCompose.toEmail}</span>
                   </span>
                 </div>
-                <button className="ec-x" onClick={() => setEmailCompose(null)} aria-label="Close compose" title="Close">
+                <button className="ec-x" onClick={() => setEmailCompose(null)} aria-label="Close compose" data-tip="Close">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
                 </button>
               </div>
@@ -709,7 +718,7 @@ export default function SalesTab({
       )}
 
       {/* ---- leads table ---- */}
-      {err && <div className="empty-state">Failed to load leads: {err}</div>}
+      {err && <div className="empty-state is-error">Failed to load leads: {err}</div>}
 
       {loading && (
         <div className="card">
@@ -800,7 +809,7 @@ export default function SalesTab({
                           ) : (
                             <span className="btn-row">
                               <button className="btn btn-sm" onClick={() => openEdit(lead)}>Edit</button>
-                              <button className="btn btn-sm btn-icon btn-del" onClick={() => setConfirmDeleteId(lead.id)} aria-label="Delete lead" title="Delete lead">
+                              <button className="btn btn-sm btn-icon btn-del" onClick={() => setConfirmDeleteId(lead.id)} aria-label="Delete lead" data-tip="Delete lead">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                               </button>
                             </span>

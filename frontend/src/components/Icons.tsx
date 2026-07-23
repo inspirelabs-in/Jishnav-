@@ -13,7 +13,7 @@ const REPORTING_HINT: Record<string, string> = {
 export function ReportingBadge({ reporting }: { reporting: string | null | undefined }) {
   if (!reporting) return <b>-</b>;
   return (
-    <b className="reporting-badge" title={REPORTING_HINT[reporting] ?? reporting}>
+    <b className="reporting-badge" data-tip={REPORTING_HINT[reporting] ?? reporting} aria-label={REPORTING_HINT[reporting] ?? reporting}>
       {reporting}
     </b>
   );
@@ -37,10 +37,13 @@ export function HandlerAvatar({
         width: size,
         height: size,
         background: `${color}1f`,
-        color,
+        // the hue as text on its own pale tint fails AA at these sizes, so the
+        // initial is darkened toward ink while the tint keeps the identity
+        color: `color-mix(in oklab, ${color} 52%, #000)`,
         fontSize: Math.round(size * 0.42),
       }}
-      title={name ?? "Unassigned"}
+      data-tip={name ?? "Unassigned"}
+      aria-label={name ?? "Unassigned"}
     >
       {(name ?? "?")[0]}
     </span>

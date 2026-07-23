@@ -281,7 +281,7 @@ export default function NotificationBell({
 
         {devMode && (
           <div className="notif-timemachine">
-            <span className="tm-label" title="Dev-only: preview the escalation flow as if it were a future month">
+            <span className="tm-label" data-tip="Dev-only: preview the escalation flow as if it were a future month">
               🕑 Time machine
             </span>
             <button className="btn btn-sm" onClick={() => shiftSim(-1)} aria-label="Back one month">−1 mo</button>

@@ -6,6 +6,7 @@ import { HANDLERS, isHandler, type Merchant } from "../types";
 import { DownloadIcon, Pagination } from "./Icons";
 import { FilterField, iso1, isoLast, RangeSelect, type MY } from "./dvFilters";
 import MerchantHistoryModal, { MERCHANT_FIELD_LABELS, fmtMerchantVal } from "./MerchantHistoryModal";
+import LedgerHeader from "./shell/LedgerHeader";
 
 /** Left-aligned value; a missing value shows a centered dash instead. */
 function Cell({ v }: { v: unknown }) {
@@ -143,8 +144,20 @@ export default function DashboardTab({ user }: { user: string }) {
     }
   }
 
+  const revCount = rows.filter((m) => m.revenue_status === "Revenue").length;
+
   return (
     <>
+      <LedgerHeader
+        title="Merchant Info"
+        description="The master record for every brand: reporting cadence, payout, deal type, and owner."
+        figures={[
+          { label: "Merchants", value: String(rows.length) },
+          { label: "Revenue", value: String(revCount) },
+          { label: "Non-revenue", value: String(rows.length - revCount) },
+        ]}
+      />
+
       {/* ---------------------------------------------- filters --- */}
       <div className="card dv-filters">
         <div className="dv-filter-grid dv-grid-2">
@@ -183,11 +196,11 @@ export default function DashboardTab({ user }: { user: string }) {
             <RangeSelect from={from} to={to} years={yearOptions} onFrom={setFrom} onTo={setTo} />
           </div>
           <div className="mi-downloads">
-            <button className="btn btn-sm" onClick={exportTableCsv} disabled={rows.length === 0} title="Download the merchant table as CSV">
+            <button className="btn btn-sm" onClick={exportTableCsv} data-tip="Download the merchant table as CSV">
               <DownloadIcon />
               Download CSV
             </button>
-            <button className="btn btn-sm" onClick={exportHistoryCsv} disabled={downloadingHistory || rows.length === 0} title="Download the edit history for the selected period as CSV">
+            <button className="btn btn-sm" onClick={exportHistoryCsv} disabled={downloadingHistory} data-tip="Download the edit history for the selected period as CSV">
               <DownloadIcon />
               {downloadingHistory ? "Preparing…" : "Download history"}
             </button>
@@ -198,7 +211,7 @@ export default function DashboardTab({ user }: { user: string }) {
       {/* ---------------------------------------------- table --- */}
       <div className="card mi-card">
         {error && !loading && (
-          <div className="empty-state">
+          <div className="empty-state is-error">
             Couldn't load merchants: {error}{" "}
             <button className="btn btn-sm" onClick={() => setReloadKey((k) => k + 1)}>Retry</button>
           </div>

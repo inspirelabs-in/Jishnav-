@@ -18,8 +18,10 @@ import {
   type OverviewMetric,
   type OverviewResponse,
 } from "../types";
+import ConversionSpine from "./ConversionSpine";
 import { DownloadIcon } from "./Icons";
 import { FilterField, iso1, isoLast, RangeSelect, SingleMonthSelect, type MY } from "./dvFilters";
+import LedgerHeader, { type LedgerFigure } from "./shell/LedgerHeader";
 
 function fmtByKind(kind: MetricKind, v: number | null | undefined): string {
   if (kind === "money") return formatMoney(v);
@@ -199,6 +201,25 @@ export default function BrandBreakdown({ user }: { user: string }) {
 
   const spanCols = 1 + (res?.months.length ?? 0) * shown.length;
 
+  // Ledger-header figures, surfaced from the loaded breakdown (presentation only).
+  const months = res?.months ?? [];
+  const latestMk = months[months.length - 1];
+  const latestTot = latestMk ? totals[latestMk] : null;
+  const periodLabel = months.length
+    ? `${formatMonthLong(months[0])} to ${formatMonthLong(latestMk)}`
+    : "";
+  const figures: LedgerFigure[] = res
+    ? [
+        { label: "Brands", value: formatNumber(res.by_merchant.length) },
+        ...(latestTot
+          ? [
+              { label: "Revenue", value: formatMoney(latestTot.revenue) } as LedgerFigure,
+              { label: "Blended CR", value: formatPct(latestTot.cr) } as LedgerFigure,
+            ]
+          : []),
+      ]
+    : [];
+
   function exportCsv() {
     if (!res || res.by_merchant.length === 0) return toast("Nothing to export yet.", "error");
     const header = ["Merchant name"];
@@ -218,6 +239,12 @@ export default function BrandBreakdown({ user }: { user: string }) {
 
   return (
     <>
+      <LedgerHeader
+        title="Data View"
+        description={`Month-by-month funnel across every brand in view${periodLabel ? ` · ${periodLabel}` : ""}.`}
+        figures={figures}
+      />
+
       {/* ---------------------------------------------- filters --- */}
       <div className="card dv-filters">
         <div className="dv-filter-grid">
@@ -291,6 +318,15 @@ export default function BrandBreakdown({ user }: { user: string }) {
         </div>
       </div>
 
+      {/* ------------------------------------- the conversion spine --- */}
+      {res && res.by_merchant.length > 0 && (
+        <ConversionSpine
+          totals={res.totals}
+          prev={res.prev_totals}
+          caption={periodLabel ? `${periodLabel} · ${res.by_merchant.length} brand${res.by_merchant.length === 1 ? "" : "s"}` : undefined}
+        />
+      )}
+
       {/* ---------------------------------------------- table --- */}
       <section className="panel ov-breakdown">
         <div className="ov-table-bar">
@@ -307,7 +343,7 @@ export default function BrandBreakdown({ user }: { user: string }) {
                   onClick={() => toggleCol(m.key)}
                   aria-pressed={on}
                   aria-disabled={lastOn || undefined}
-                  title={lastOn ? "At least one column must stay" : on ? `Hide ${m.label} column` : `Show ${m.label} column`}
+                  data-tip={lastOn ? "At least one column must stay" : on ? `Hide ${m.label} column` : `Show ${m.label} column`}
                 >
                   <span className="mc-dot" />
                   {m.label}
@@ -315,13 +351,13 @@ export default function BrandBreakdown({ user }: { user: string }) {
               );
             })}
           </div>
-          <button className="btn btn-sm ov-csv" onClick={exportCsv} disabled={!res || res.by_merchant.length === 0} title="Download the breakdown as CSV">
+          <button className="btn btn-sm ov-csv" onClick={exportCsv} data-tip="Download the breakdown as CSV">
             <DownloadIcon />
             Table CSV
           </button>
         </div>
 
-        {err && <div className="empty-state">Couldn't load the breakdown: {err}</div>}
+        {err && <div className="empty-state is-error">Couldn't load the breakdown: {err}</div>}
 
         {res && (
           <div className="table-wrap ov-scroll" style={{ opacity: loading ? 0.55 : 1, transition: "opacity 0.2s" }}>

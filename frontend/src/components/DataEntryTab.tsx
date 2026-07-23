@@ -10,6 +10,7 @@ import { DownloadIcon, Pagination, TrashIcon } from "./Icons";
 import MonthYearPicker from "./MonthYearPicker";
 import PeriodPicker from "./PeriodPicker";
 import RemarkCell from "./RemarkPopover";
+import LedgerHeader from "./shell/LedgerHeader";
 
 interface Props {
   user: string;
@@ -174,8 +175,20 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
     toast(`Exported ${entries.length} row${entries.length === 1 ? "" : "s"}`);
   }
 
+  const revEntries = entries.filter((e) => e.revenue_status === "Revenue").length;
+
   return (
     <>
+      <LedgerHeader
+        title="Data Entry"
+        description="Post a brand's numbers for a month, and review the entries you've logged."
+        figures={[
+          { label: "Entries", value: formatNumber(entries.length) },
+          { label: "Revenue", value: String(revEntries) },
+          { label: "Non-revenue", value: String(entries.length - revEntries) },
+        ]}
+      />
+
       {mode === "entry" ? (
         <EntryForm
           user={user}
@@ -237,7 +250,7 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
           <button
             className="btn"
             onClick={exportEntriesCsv}
-            title="Download the rows currently shown, as CSV"
+            data-tip="Download the rows currently shown, as CSV"
           >
             <DownloadIcon />
             Export CSV
@@ -245,7 +258,7 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
         </div>
 
         {loadError && !loading && (
-          <div className="empty-state">
+          <div className="empty-state is-error">
             Couldn't load entries: {loadError}{" "}
             <button className="btn btn-sm" onClick={loadEntries}>
               Retry
@@ -262,7 +275,7 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
         )}
 
         {!loadError && !(loading && firstLoad.current) && (
-          <div className="table-wrap" style={{ opacity: loading ? 0.55 : 1, transition: "opacity 0.2s" }}>
+          <div className="table-wrap is-fit" style={{ opacity: loading ? 0.55 : 1, transition: "opacity 0.2s" }}>
             <table className="data">
               <thead>
                 <tr>
@@ -431,7 +444,7 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
                             </button>
                           </span>
                         ) : (
-                          <span className="btn-row" title={canEdit ? undefined : `Only ${e.entered_by} can change this entry`}>
+                          <span className="btn-row" data-tip={canEdit ? undefined : `Only ${e.entered_by} can change this entry`}>
                             <button
                               className="btn btn-sm"
                               disabled={!canEdit}
@@ -443,7 +456,7 @@ export default function DataEntryTab({ user, onDataChanged }: Props) {
                               <button
                                 className="btn btn-sm btn-icon btn-del"
                                 aria-label={`Delete the ${e.merchant_name} entry`}
-                                title="Delete this entry"
+                                data-tip="Delete this entry"
                                 onClick={() => setConfirmDeleteId(e.id)}
                               >
                                 <TrashIcon />

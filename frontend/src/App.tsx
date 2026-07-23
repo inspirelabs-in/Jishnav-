@@ -8,6 +8,8 @@ import DeliveryTab from "./components/DeliveryTab";
 import NotificationBell from "./components/NotificationBell";
 import SalesLandingPage from "./components/SalesLandingPage";
 import SalesTab from "./components/SalesTab";
+import AppShell from "./components/shell/AppShell";
+import type { NavGroup } from "./components/shell/Sidebar";
 import { ToastProvider } from "./Toast";
 import { isDelivery, isPrivileged, isSales, USERS, userLabel } from "./types";
 
@@ -21,14 +23,16 @@ type TabKey =
   | "saleshome"
   | "sales";
 
-const HOME_TAB: { key: TabKey; label: string } = { key: "home", label: "Home" };
-
-// CS feature tabs (the landing sits in front of these).
-const CS_FEATURE_TABS: { key: TabKey; label: string }[] = [
-  { key: "entry", label: "Data Entry" },
-  { key: "analytics", label: "Data View" },
-  { key: "dashboard", label: "Merchant Info" },
-];
+const TITLES: Record<TabKey, string> = {
+  home: "Home",
+  entry: "Data Entry",
+  analytics: "Data View",
+  dashboard: "Merchant Info",
+  transfer: "Brand Transfer",
+  delivery: "Delivery Queue",
+  saleshome: "Home",
+  sales: "Sales Pipeline",
+};
 
 export default function App() {
   const [tab, setTab] = useState<TabKey>("home");
@@ -36,7 +40,6 @@ export default function App() {
   // bump to force notification refetch after entries are saved
   const [notifVersion, setNotifVersion] = useState(0);
   // Deep-link state for the Sales landing -> pipeline (pre-applied filters).
-  // A bump on salesNav remounts SalesTab so the filters re-apply each jump.
   const [salesInit, setSalesInit] = useState<{ stage?: string; priority?: string }>({});
   const [salesNav, setSalesNav] = useState(0);
   // Bumped when the landing asks to open the notification drawer.
@@ -45,15 +48,35 @@ export default function App() {
   const privileged = isPrivileged(user);
   const delivery = isDelivery(user);
   const sales = isSales(user);
-  // Each role gets its own tab set. Handlers / Manager / Founders land on the CS
-  // Home; Sales1 / Sales2 land on the Sales Home; Delivery goes straight to work.
-  const tabs: { key: TabKey; label: string }[] = delivery
-    ? [{ key: "delivery", label: "Delivery Queue" }]
+
+  // Sidebar sections per role (mirrors the old tab sets exactly).
+  const CS_WORKSPACE = [
+    { key: "home", label: "Home" },
+    { key: "entry", label: "Data Entry" },
+    { key: "analytics", label: "Data View" },
+    { key: "dashboard", label: "Merchant Info" },
+  ];
+  const groups: NavGroup[] = delivery
+    ? [{ title: "Workspace", items: [{ key: "delivery", label: "Delivery Queue" }] }]
     : sales
-      ? [{ key: "saleshome", label: "Home" }, { key: "sales", label: "Sales Pipeline" }]
+      ? [{ title: "Workspace", items: [{ key: "saleshome", label: "Home" }, { key: "sales", label: "Sales Pipeline" }] }]
       : privileged
-        ? [HOME_TAB, ...CS_FEATURE_TABS, { key: "transfer", label: "Brand Transfer" }]
-        : [HOME_TAB, ...CS_FEATURE_TABS];
+        ? [
+            { title: "Workspace", items: CS_WORKSPACE },
+            { title: "Manage", items: [{ key: "transfer", label: "Brand Transfer" }] },
+          ]
+        : [{ title: "Workspace", items: CS_WORKSPACE }];
+
+  const flatKeys = groups.flatMap((g) => g.items.map((i) => i.key));
+  const roleLabel = delivery
+    ? "Delivery"
+    : sales
+      ? "Sales"
+      : user === "Manager"
+        ? "Manager"
+        : user === "Founders Office"
+          ? "Founders"
+          : "Handler";
 
   function openSales(init?: { stage?: string; priority?: string }) {
     if (init) {
@@ -63,45 +86,28 @@ export default function App() {
     setTab("sales");
   }
 
-  // If the active tab is not available for this role, fall back to the first one.
+  // If the active section is not available for this role, fall back to the first.
   useEffect(() => {
-    if (!tabs.some((t) => t.key === tab)) setTab(tabs[0].key);
+    if (!flatKeys.includes(tab)) setTab(flatKeys[0] as TabKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   return (
     <ToastProvider>
-      <header className="header">
-        <div className="brand">
-          <span className="brand-co">GrabOn</span>
-          <span className="brand-name">CR Portal</span>
-        </div>
-        <nav className="tabs">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              className={`tab-btn ${tab === t.key ? "active" : ""}`}
-              onClick={() => setTab(t.key)}
-              aria-current={tab === t.key ? "page" : undefined}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-        <div className="header-right">
+      <AppShell
+        groups={groups}
+        activeKey={tab}
+        title={TITLES[tab]}
+        onNavigate={(k) => setTab(k as TabKey)}
+        user={user}
+        users={USERS}
+        userLabel={userLabel}
+        userRole={roleLabel}
+        onUserChange={setUser}
+        topbarRight={
           <NotificationBell user={user} version={notifVersion} openSignal={notifOpenSignal} />
-          <div className="user-select">
-            <span className="user-avatar">{userLabel(user)[0]}</span>
-            <select value={user} onChange={(e) => setUser(e.target.value)} aria-label="Acting as">
-              {USERS.map((u) => (
-                <option key={u} value={u}>{userLabel(u)}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </header>
-
-      <main className="page">
+        }
+      >
         {tab === "home" && !sales && !delivery && (
           <CSLandingPage
             user={user}
@@ -129,7 +135,7 @@ export default function App() {
             initialPriority={salesInit.priority}
           />
         )}
-      </main>
+      </AppShell>
     </ToastProvider>
   );
 }

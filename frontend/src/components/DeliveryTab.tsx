@@ -4,6 +4,7 @@ import { useToast } from "../Toast";
 import type { DeliveryRequest } from "../types";
 import { HandlerAvatar, Pagination, ReportingBadge, TrashIcon } from "./Icons";
 import PeriodPicker from "./PeriodPicker";
+import LedgerHeader from "./shell/LedgerHeader";
 
 export default function DeliveryTab({ user }: { user: string }) {
   const [requests, setRequests] = useState<DeliveryRequest[]>([]);
@@ -174,11 +175,19 @@ export default function DeliveryTab({ user }: { user: string }) {
 
   return (
     <>
+      <LedgerHeader
+        title="Delivery Queue"
+        description="Fill the delivery-side figures for the entries the CS team has sent over."
+        figures={[
+          { label: "Waiting", value: formatNumber(requests.length) },
+          { label: "Filled", value: formatNumber(done.length) },
+        ]}
+      />
+
       <div className="card">
         <div className="dash-head">
           <div>
-            <h3 style={{ margin: 0 }}>Delivery queue</h3>
-            <p className="card-sub" style={{ margin: "4px 0 0" }}>
+            <p className="card-sub" style={{ margin: 0 }}>
               {requests.length} request{requests.length === 1 ? "" : "s"} waiting for your numbers.
             </p>
           </div>
@@ -194,7 +203,7 @@ export default function DeliveryTab({ user }: { user: string }) {
         </div>
 
         {error && !loading && (
-          <div className="empty-state">
+          <div className="empty-state is-error">
             Couldn't load the queue: {error}{" "}
             <button className="btn btn-sm" onClick={() => setReloadKey((k) => k + 1)}>Retry</button>
           </div>
@@ -415,7 +424,7 @@ export default function DeliveryTab({ user }: { user: string }) {
                             </button>
                           </span>
                         ) : (
-                          <span className="btn-row" title={canEdit ? undefined : `Only ${d.delivery_filled_by} can change this`}>
+                          <span className="btn-row" data-tip={canEdit ? undefined : `Only ${d.delivery_filled_by} can change this`}>
                             <button className="btn btn-sm" disabled={!canEdit} onClick={() => startHistoryEdit(d)}>
                               Edit
                             </button>
@@ -423,7 +432,7 @@ export default function DeliveryTab({ user }: { user: string }) {
                               className="btn btn-sm btn-icon btn-del"
                               disabled={!canEdit}
                               aria-label={`Delete delivery data for ${d.merchant_name}`}
-                              title={canEdit ? "Delete delivery data" : `Only ${d.delivery_filled_by} can delete this`}
+                              data-tip={canEdit ? "Delete delivery data" : `Only ${d.delivery_filled_by} can delete this`}
                               onClick={() => setConfirmDeleteId(d.id)}
                             >
                               <TrashIcon />

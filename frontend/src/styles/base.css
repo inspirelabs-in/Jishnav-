@@ -1,0 +1,169 @@
+/* ============================================================================
+   CR PORTAL — BASE
+   Reset, typographic voice, focus, scrollbars, the shared motion vocabulary
+   and the handful of utilities the screens lean on. Tokens only.
+   ============================================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  /* `clip` (not `hidden`) so tooltips that reach past the viewport edge are
+     cut instead of creating a phantom scrollbar — and, unlike `hidden`, it
+     does not make the body a scroll container, so sticky headers still stick. */
+  overflow-x: clip;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: var(--fw-regular);
+  font-feature-settings: "cv05" 1, "cv11" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background var(--dur-3) var(--ease-out), color var(--dur-3) var(--ease-out);
+}
+
+/* the ambient field: two very slow, very faint metric-coloured washes so the
+   ground is never a flat slab. Fixed, behind everything, non-interactive. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20vmax;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(38vmax 30vmax at 78% -6%, color-mix(in oklab, var(--m-revenue) 12%, transparent), transparent 62%),
+    radial-gradient(34vmax 28vmax at 4% 104%, color-mix(in oklab, var(--m-clicks) 10%, transparent), transparent 62%);
+  opacity: 0.55;
+  animation: field-drift 44s ease-in-out infinite alternate;
+}
+@keyframes field-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(-2.5%, 2%, 0) scale(1.06); }
+}
+
+#root { position: relative; z-index: 1; }
+
+button { font: inherit; cursor: pointer; color: inherit; }
+input, select, textarea { font: inherit; color: var(--ink); }
+a { color: var(--accent-ink); }
+
+h1, h2, h3, h4, h5 { margin: 0; font-weight: var(--fw-bold); letter-spacing: var(--track-title); }
+
+::selection { background: var(--accent-bg); color: var(--ink); }
+
+:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--r-sm); }
+
+/* ---- scrollbars: part of the chrome, not an afterthought ---------------- */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--r-full);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--ink-4); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ============================================================================
+   TYPOGRAPHIC VOICE
+   Three levers do the hierarchy: size, weight, colour. Numbers are always
+   tabular so columns never dance.
+   ============================================================================ */
+
+/* every figure in the app */
+.mono, .num, td.num, .kpi-value, .lh-fig-v {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "cv05" 1;
+  letter-spacing: var(--track-num);
+}
+.mono { font-size: var(--fs-small); font-weight: var(--fw-medium); }
+
+/* the one micro-label voice: uppercase, tracked, quiet */
+.field label,
+.mini-field label,
+.notif-panel h4,
+table.data th,
+.dash-label,
+.period-caption,
+.read-label,
+.delivery-section-label,
+.spd-label,
+.lp-stat-label,
+.ec-field label,
+.sf-section h4,
+.notif-section,
+.ov-controls-label,
+.ov-range-cap,
+.rp-section-label,
+.period-section-label,
+.lp-sec {
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+
+.muted { color: var(--ink-3); }
+.req::after { content: " *"; color: var(--danger); font-weight: var(--fw-regular); }
+
+/* ============================================================================
+   MOTION VOCABULARY — the shared keyframes. Transform + opacity only.
+   ============================================================================ */
+@keyframes rise-in   { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slip-in   { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@keyframes pop-in    { from { opacity: 0; transform: scale(0.96) translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes grow-x    { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes spin      { to { transform: rotate(360deg); } }
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70%  { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes shimmer {
+  from { background-position: 160% 0; }
+  to   { background-position: -60% 0; }
+}
+
+/* stagger helper — children cascade in. Capped at 12 so long lists stay fast. */
+.stagger > * { animation: rise-in var(--dur-4) var(--ease-out) both; }
+.stagger > *:nth-child(1)  { animation-delay: calc(var(--stagger) * 0); }
+.stagger > *:nth-child(2)  { animation-delay: calc(var(--stagger) * 1); }
+.stagger > *:nth-child(3)  { animation-delay: calc(var(--stagger) * 2); }
+.stagger > *:nth-child(4)  { animation-delay: calc(var(--stagger) * 3); }
+.stagger > *:nth-child(5)  { animation-delay: calc(var(--stagger) * 4); }
+.stagger > *:nth-child(6)  { animation-delay: calc(var(--stagger) * 5); }
+.stagger > *:nth-child(7)  { animation-delay: calc(var(--stagger) * 6); }
+.stagger > *:nth-child(8)  { animation-delay: calc(var(--stagger) * 7); }
+.stagger > *:nth-child(n+9){ animation-delay: calc(var(--stagger) * 8); }
+
+/* ---- shared skeleton --------------------------------------------------- */
+.skeleton, .lp-skel, .cscx-skel, .lp-spot-skel {
+  border-radius: var(--r-sm);
+  background: linear-gradient(
+    100deg,
+    var(--surface) 30%,
+    color-mix(in oklab, var(--surface) 55%, var(--paper-3)) 48%,
+    var(--surface) 66%
+  );
+  background-size: 240% 100%;
+  animation: shimmer 1.5s linear infinite;
+}
+.lp-skel { display: inline-block; width: 56px; height: 22px; }
+.load-text { color: var(--ink-3); font-size: var(--fs-body); }
+
+/* refetch: dim the stale data rather than yanking it */
+.is-refetching { opacity: 0.5; pointer-events: none; transition: opacity var(--dur-3) var(--ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
+  .skeleton, .lp-skel, .cscx-skel, .lp-spot-skel { animation: none; }
+}

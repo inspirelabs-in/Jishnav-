@@ -3,6 +3,7 @@ import { api, formatRailwayTime } from "../api";
 import { useToast } from "../Toast";
 import { HANDLERS, type Merchant, type Transfer } from "../types";
 import { HandlerAvatar, Pagination } from "./Icons";
+import LedgerHeader from "./shell/LedgerHeader";
 
 export default function BrandTransferTab({
   user,
@@ -83,12 +84,20 @@ export default function BrandTransferTab({
 
   return (
     <>
+      <LedgerHeader
+        title="Brand Transfer"
+        description="Reassign a merchant to a different handler. Every handoff keeps its audit trail."
+        figures={[
+          { label: "Brands", value: String(merchants.length) },
+          { label: "Transfers", value: String(history.length) },
+        ]}
+      />
+
       <div className="card">
         <div className="dash-head">
           <div>
-            <h3 style={{ margin: 0 }}>Brand Transfer</h3>
-            <p className="card-sub" style={{ margin: "4px 0 0" }}>
-              Reassign a merchant to a different handler. Pick the new handler by name.
+            <p className="card-sub" style={{ margin: 0 }}>
+              Pick the new handler by name.
             </p>
           </div>
           <div className="dash-tools">
@@ -112,7 +121,7 @@ export default function BrandTransferTab({
         </div>
 
         {error && !loading && (
-          <div className="empty-state">
+          <div className="empty-state is-error">
             Couldn't load: {error}{" "}
             <button className="btn btn-sm" onClick={() => setReloadKey((k) => k + 1)}>Retry</button>
           </div>

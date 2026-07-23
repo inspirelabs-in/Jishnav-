@@ -1,0 +1,174 @@
+/* ============================================================================
+   CR PORTAL — DESIGN TOKENS
+   Direction: "Conversion" — a light operations console where every number is
+   coloured by WHAT IT MEASURES. Clicks are always blue, Sales always green,
+   CR always pink, GMV always amber, Revenue always violet — in the spine, the
+   charts, the table headers, the chips, the bars. The interface is colourful
+   because the DATA is colourful, never as decoration.
+
+   Inspirelabs orange is the one thing that means action / active / recorded.
+   It is never data, and it is the hue of the mark in the sidebar.
+
+   Everything in the app resolves through this file.
+   ============================================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Type ------------------------------------------------------------ */
+  --font-ui: "Inter Variable", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-num: "Inter Variable", "Inter", "Segoe UI", system-ui, sans-serif;
+
+  /* scale — ratio 1.25 from a 14px base (dense operations tool) */
+  --fs-micro: 10.5px;
+  --fs-caption: 11.5px;
+  --fs-small: 12.5px;
+  --fs-body: 13.5px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 25px;
+  --fs-3xl: 32px;
+  --fs-4xl: 42px;
+
+  --lh-tight: 1.15;
+  --lh-snug: 1.35;
+  --lh-body: 1.55;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-black: 800;
+
+  --track-display: -0.025em;   /* >= 25px */
+  --track-title: -0.015em;     /* 16-20px */
+  --track-label: 0.08em;       /* uppercase micro labels */
+  --track-num: -0.01em;
+
+  /* ---- Spacing — 4px grid --------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  /* ---- Control sizing -------------------------------------------------- */
+  --ctl-sm: 30px;
+  --ctl: 36px;
+  --ctl-lg: 44px;
+
+  /* ---- Shell metrics --------------------------------------------------- */
+  --sidebar-w: 244px;
+  --sidebar-rail: 68px;
+  --topbar-h: 58px;
+  --page-max: 1560px;
+
+  /* ---- Radius ---------------------------------------------------------- */
+  --r-xs: 5px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-full: 999px;
+
+  /* ---- Motion ---------------------------------------------------------- */
+  --dur-1: 120ms;   /* press, colour */
+  --dur-2: 180ms;   /* hover, small reveals */
+  --dur-3: 260ms;   /* dropdowns, chips */
+  --dur-4: 380ms;   /* panels, page */
+  --dur-5: 560ms;   /* bars, count-ups, hero */
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-inout: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
+
+  --stagger: 38ms;
+
+  /* ---- Surfaces: one hue, lightness only ------------------------------- */
+  --canvas: #F4F6FB;        /* page ground */
+  --surface: #EBEEF5;       /* inset / wells / table header */
+  --paper: #FFFFFF;         /* card */
+  --paper-2: #FFFFFF;       /* raised: menus, modals, popovers */
+  --paper-3: #F4F6FB;       /* hover on a raised surface */
+
+  /* ---- Borders --------------------------------------------------------- */
+  --rule-soft: rgba(12, 16, 27, 0.055);
+  --rule: rgba(12, 16, 27, 0.10);
+  --border-strong: rgba(12, 16, 27, 0.20);
+
+  /* ---- Ink — four tiers ------------------------------------------------ */
+  --ink: #0C1019;
+  --ink-2: #3E4762;
+  --ink-3: #525B76;   /* AA on --canvas: metadata + micro-labels stay readable */
+  --ink-4: #7F889E;   /* placeholders, disabled — never load-bearing text */
+  --on-fill: #FFFFFF;
+
+  /* ---- Brand ----------------------------------------------------------- */
+  /* The mark keeps the logo's own vivid orange; controls use a deeper tone of
+     the same hue so white label text on a filled button still clears 4.5:1. */
+  --brand-orange: #FF7F45;
+  --brand-ink: #0F0F0D;
+  --brand-grey: #7C7C7C;
+
+  --accent: #CC4B12;         /* action / active / "you are here" */
+  --accent-hover: #B34010;
+  --accent-press: #99360D;
+  --accent-ink: #A83C0C;     /* the accent as TEXT on paper */
+  --accent-bg: rgba(204, 75, 18, 0.10);
+  --accent-line: rgba(204, 75, 18, 0.34);
+  --on-accent: #FFFFFF;
+  --accent-glow: rgba(204, 75, 18, 0.34);
+
+  /* ---- Metric hues — the vocabulary of the whole app -------------------- */
+  --m-clicks: #2563EB;
+  --m-sales: #0C9D63;
+  --m-cr: #DB2777;
+  --m-gmv: #C2740A;
+  --m-revenue: #7A4EE0;
+  --m-alt: #0891B2;
+
+  /* ---- Semantic -------------------------------------------------------- */
+  --success: #0C9D63;  --success-bg: rgba(12, 157, 99, 0.12);   --success-ink: #076D44;
+  --danger: #DC2F30;   --danger-bg: rgba(220, 47, 48, 0.10);    --danger-ink: #A31718;
+  --warning: #C2740A;  --warning-bg: rgba(194, 116, 10, 0.12);  --warning-ink: #8A5106;
+  --info: #2563EB;     --info-bg: rgba(37, 99, 235, 0.10);      --info-ink: #1A4BB8;
+
+  /* ---- Elevation: a 1px ring plus soft depth --------------------------- */
+  --shadow-1: 0 0 0 1px rgba(12, 16, 27, 0.055),
+              0 1px 2px -1px rgba(12, 16, 27, 0.07);
+  --shadow-2: 0 0 0 1px rgba(12, 16, 27, 0.06),
+              0 4px 10px -3px rgba(12, 16, 27, 0.10),
+              0 12px 28px -10px rgba(12, 16, 27, 0.12);
+  --shadow-3: 0 0 0 1px rgba(12, 16, 27, 0.07),
+              0 8px 20px -6px rgba(12, 16, 27, 0.12),
+              0 32px 64px -18px rgba(12, 16, 27, 0.20);
+  --scrim: rgba(12, 16, 27, 0.42);
+
+  --sheen: none;
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent-line);
+  --dash: 1.5px dashed var(--border-strong);
+
+  /* ---- Aliases used by data cells / charts / inline styles ------------- */
+  --data-1: var(--m-clicks);
+  --data-2: var(--m-sales);
+  --data-3: var(--m-cr);
+  --data-4: var(--m-revenue);
+  --data-5: var(--m-gmv);
+  --data-6: var(--ink-3);
+}
+
+/* ---- Reduced motion: keep opacity, drop movement ----------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

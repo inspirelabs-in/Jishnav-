@@ -52,7 +52,7 @@ function useCountUp(target: number, ms = 950): number {
 }
 
 function stageColor(key: string): string {
-  return SALES_STAGES.find((s) => s.key === key)?.color ?? "#888";
+  return SALES_STAGES.find((s) => s.key === key)?.color ?? "#8A93A8";
 }
 function stageLabel(key: string): string {
   return SALES_STAGES.find((s) => s.key === key)?.label ?? key;
@@ -99,17 +99,17 @@ interface Slide {
 // A small, fixed set of confetti pieces (elegant, not a storm). Preset so the
 // fall never re-randomises between renders. Rains behind the "closed" slide.
 const CONFETTI: { l: number; d: number; dur: number; c: string; w: number; h: number }[] = [
-  { l: 6, d: 0, dur: 3.2, c: "#E7B84B", w: 6, h: 9 },
-  { l: 15, d: 1.1, dur: 3.8, c: "#2E9E5B", w: 5, h: 5 },
-  { l: 23, d: 0.5, dur: 3.0, c: "#5B9BE0", w: 5, h: 8 },
-  { l: 33, d: 2.0, dur: 4.1, c: "#E7B84B", w: 5, h: 5 },
-  { l: 42, d: 0.9, dur: 3.5, c: "#E27A6B", w: 6, h: 9 },
-  { l: 51, d: 1.7, dur: 3.1, c: "#EFE3C2", w: 5, h: 5 },
-  { l: 60, d: 0.2, dur: 3.9, c: "#2E9E5B", w: 5, h: 8 },
-  { l: 69, d: 2.4, dur: 3.4, c: "#5B9BE0", w: 5, h: 5 },
-  { l: 78, d: 1.3, dur: 3.7, c: "#E7B84B", w: 6, h: 9 },
-  { l: 87, d: 0.6, dur: 3.2, c: "#E27A6B", w: 5, h: 5 },
-  { l: 94, d: 2.1, dur: 4.0, c: "#EFE3C2", w: 5, h: 8 },
+  { l: 6, d: 0, dur: 3.2, c: "#E08C0C", w: 6, h: 9 },
+  { l: 15, d: 1.1, dur: 3.8, c: "#17B978", w: 5, h: 5 },
+  { l: 23, d: 0.5, dur: 3.0, c: "#3D8BF5", w: 5, h: 8 },
+  { l: 33, d: 2.0, dur: 4.1, c: "#E08C0C", w: 5, h: 5 },
+  { l: 42, d: 0.9, dur: 3.5, c: "#EE5C97", w: 6, h: 9 },
+  { l: 51, d: 1.7, dur: 3.1, c: "#C9E633", w: 5, h: 5 },
+  { l: 60, d: 0.2, dur: 3.9, c: "#17B978", w: 5, h: 8 },
+  { l: 69, d: 2.4, dur: 3.4, c: "#3D8BF5", w: 5, h: 5 },
+  { l: 78, d: 1.3, dur: 3.7, c: "#E08C0C", w: 6, h: 9 },
+  { l: 87, d: 0.6, dur: 3.2, c: "#EE5C97", w: 5, h: 5 },
+  { l: 94, d: 2.1, dur: 4.0, c: "#C9E633", w: 5, h: 8 },
 ];
 
 function Confetti() {
@@ -139,15 +139,42 @@ export default function SalesLandingPage({
   user: string;
   onOpen: SalesOpen;
 }) {
-  const [leads, setLeads] = useState<SalesLead[] | null>(null);
+  // Cache leads per user so a reload (Chrome discarding the tab, etc.) repaints
+  // the last pipeline instantly and revalidates quietly, never the skeleton.
+  const leadsKey = `cr.saleshome.${user}`;
+  const readLeads = (): SalesLead[] | null => {
+    try {
+      const s = sessionStorage.getItem(leadsKey);
+      return s ? (JSON.parse(s) as SalesLead[]) : null;
+    } catch {
+      return null;
+    }
+  };
+  const [leads, setLeads] = useState<SalesLead[] | null>(() => readLeads());
 
   useEffect(() => {
     let live = true;
-    setLeads(null);
+    // keep any cached pipeline on screen; only blank to skeleton with nothing
+    let cached: SalesLead[] | null = null;
+    try {
+      const s = sessionStorage.getItem(`cr.saleshome.${user}`);
+      cached = s ? (JSON.parse(s) as SalesLead[]) : null;
+    } catch {
+      cached = null;
+    }
+    setLeads(cached);
     api
       .listLeads({ assigned_to: user })
-      .then((d) => live && setLeads(d))
-      .catch(() => live && setLeads([]));
+      .then((d) => {
+        if (!live) return;
+        setLeads(d);
+        try {
+          sessionStorage.setItem(`cr.saleshome.${user}`, JSON.stringify(d));
+        } catch {
+          /* private mode / quota — ignore */
+        }
+      })
+      .catch(() => live && setLeads((prev) => prev ?? []));
     return () => {
       live = false;
     };
@@ -192,7 +219,7 @@ export default function SalesLandingPage({
       .map((l) => l.brand_name);
     return [
       {
-        key: "won", accent: "#2E9E5B", icon: <TrophyIc />, kicker: "Closed this month",
+        key: "won", accent: "#17B978", icon: <TrophyIc />, kicker: "Closed this month",
         brands: won,
         line: won.length
           ? `Congrats - you closed ${won.length} ${won.length === 1 ? "brand" : "brands"} this month!`
@@ -201,7 +228,7 @@ export default function SalesLandingPage({
         empty: "Push a deal over the line",
       },
       {
-        key: "near", accent: "#E09A1E", icon: <HandshakeIc />, kicker: "On the verge",
+        key: "near", accent: "#E08C0C", icon: <HandshakeIc />, kicker: "On the verge",
         brands: nearing,
         line: nearing.length
           ? `${nearing.length} ${nearing.length === 1 ? "brand is" : "brands are"} one nudge from closing.`
@@ -210,7 +237,7 @@ export default function SalesLandingPage({
         empty: "Advance a responded lead",
       },
       {
-        key: "hot", accent: "#E24B4A", icon: <FlameIc />, kicker: "Hot & waiting",
+        key: "hot", accent: "#E8484B", icon: <FlameIc />, kicker: "Hot & waiting",
         brands: hot,
         line: hot.length
           ? `${hot.length} hot ${hot.length === 1 ? "lead is" : "leads are"} waiting to be closed.`
@@ -240,7 +267,7 @@ export default function SalesLandingPage({
       {/* ---- hero ---- */}
       <section
         className="lp-hero"
-        style={{ ["--glow-a" as string]: "#1D9E75", ["--glow-b" as string]: "#BA7517" }}
+        style={{ ["--glow-a" as string]: "#12B5A5", ["--glow-b" as string]: "#E08C0C" }}
       >
         <div className="lp-hero-content">
           <span className="lp-eyebrow">GrabOn · Sales Pipeline</span>
@@ -253,15 +280,15 @@ export default function SalesLandingPage({
           </p>
           <div className="lp-hero-chips">
             <span className="lp-hero-chip">
-              <span className="lp-cdot" style={{ ["--cdot" as string]: "#2E7DE0" }} />
+              <span className="lp-cdot" style={{ ["--cdot" as string]: "#3D8BF5" }} />
               {loaded ? <><span className="mono">{stats.active}</span>&nbsp;active</> : "loading leads"}
             </span>
             <span className="lp-hero-chip">
-              <span className="lp-cdot" style={{ ["--cdot" as string]: "#E24B4A" }} />
+              <span className="lp-cdot" style={{ ["--cdot" as string]: "#E8484B" }} />
               {loaded ? <><span className="mono">{stats.hot}</span>&nbsp;hot</> : "checking priority"}
             </span>
             <span className="lp-hero-chip">
-              <span className="lp-cdot" style={{ ["--cdot" as string]: "#C6D92D" }} />
+              <span className="lp-cdot" style={{ ["--cdot" as string]: "#C9E633" }} />
               {loaded ? <><span className="mono">{stats.touch}</span>&nbsp;touchpoints</> : "counting activity"}
             </span>
           </div>
@@ -335,20 +362,20 @@ export default function SalesLandingPage({
 
       {/* ---- stat tiles ---- */}
       <div className="lp-stats">
-        <StatTile color="#2E7DE0" label="Active leads" delay={0}
+        <StatTile color="#3D8BF5" label="Active leads" delay={0}
           value={loaded ? Math.round(nActive).toString() : skel} meta="in play right now" icon={
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M4 12h10M4 17h7" /></svg>
           } />
-        <StatTile color="#E24B4A" label="Hot leads" delay={70}
+        <StatTile color="#E8484B" label="Hot leads" delay={70}
           value={loaded ? Math.round(nHot).toString() : skel} meta="need attention now" icon={
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3 1-3s0 2 2 2c1.5 0 1-4 2-9Z" /></svg>
           } />
-        <StatTile color={stats.due > 0 ? "#D97706" : "#15804C"} label="Follow-ups due" delay={140}
+        <StatTile color={stats.due > 0 ? "#E08C0C" : "#17B978"} label="Follow-ups due" delay={140}
           value={loaded ? Math.round(nDue).toString() : skel}
           meta={stats.due > 0 ? "on or past due" : "nothing overdue"} icon={
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
           } />
-        <StatTile color="#639922" label="Deals won" delay={210}
+        <StatTile color="#7EAE12" label="Deals won" delay={210}
           value={loaded ? Math.round(nWon).toString() : skel} meta="closed and live" icon={
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 0 1-10 0Z" /><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3" /></svg>
           } />
@@ -365,7 +392,7 @@ export default function SalesLandingPage({
               className="lp-stagecard"
               style={{ ["--sc" as string]: stageColor(s), animationDelay: `${i * 55}ms` }}
               onClick={() => onOpen({ stage: s })}
-              title={`Open the pipeline filtered to ${stageLabel(s)}`}
+              data-tip={`Open the pipeline filtered to ${stageLabel(s)}`}
             >
               <span className="lp-stagecard-top">
                 <span className="lp-stage-badge" />
@@ -386,7 +413,7 @@ export default function SalesLandingPage({
       {/* ---- quick actions ---- */}
       <p className="lp-sec">Get to work</p>
       <div className="lp-cards">
-        <button className="lp-card" style={{ ["--cc" as string]: "#14213d", animationDelay: "0ms" }} onClick={() => onOpen()}>
+        <button className="lp-card" style={{ ["--cc" as string]: "#C9E633", animationDelay: "0ms" }} onClick={() => onOpen()}>
           <span className="lp-card-ic">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="7" height="16" rx="1.5" /><rect x="14" y="4" width="7" height="10" rx="1.5" /></svg>
           </span>
@@ -399,7 +426,7 @@ export default function SalesLandingPage({
           <span className="lp-card-accent" />
         </button>
 
-        <button className="lp-card" style={{ ["--cc" as string]: "#E24B4A", animationDelay: "60ms" }} onClick={() => onOpen({ priority: "hot" })}>
+        <button className="lp-card" style={{ ["--cc" as string]: "#E8484B", animationDelay: "60ms" }} onClick={() => onOpen({ priority: "hot" })}>
           <span className="lp-card-ic">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3 1-3s0 2 2 2c1.5 0 1-4 2-9Z" /></svg>
           </span>
@@ -412,7 +439,7 @@ export default function SalesLandingPage({
           <span className="lp-card-accent" />
         </button>
 
-        <button className="lp-card" style={{ ["--cc" as string]: "#639922", animationDelay: "120ms" }} onClick={() => onOpen({ stage: "closed_won" })}>
+        <button className="lp-card" style={{ ["--cc" as string]: "#7EAE12", animationDelay: "120ms" }} onClick={() => onOpen({ stage: "closed_won" })}>
           <span className="lp-card-ic">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
           </span>

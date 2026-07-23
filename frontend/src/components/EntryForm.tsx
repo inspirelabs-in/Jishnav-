@@ -408,16 +408,20 @@ function MerchantInfoStrip({ merchant, user, onUpdated }: { merchant: Merchant; 
 
   return (
     <div className="merchant-info">
-      <span className="info-pill">ID <b className="mono">{merchant.merchant_id}</b></span>
-      <span className="info-pill">Category <b>{merchant.breadcrumb1_name ?? "-"}</b></span>
-      {merchant.breadcrumb2_name && (
-        <span className="info-pill">Sub <b>{merchant.breadcrumb2_name}</b></span>
-      )}
-      <span className="info-pill">Reporting <ReportingBadge reporting={merchant.reporting} /></span>
-      <span className="info-pill">Payout <b>{merchant.payout ?? "-"}</b></span>
-      <span className="info-pill">Deal <b>{merchant.deal_type ?? "-"}</b></span>
-      <span className="info-pill">Owner <b>{merchant.owner ?? "-"}</b></span>
-      <button className="btn btn-sm info-edit-btn" onClick={startEdit}>Edit</button>
+      <div className="info-pills">
+        <span className="info-pill">ID <b className="mono">{merchant.merchant_id}</b></span>
+        <span className="info-pill">Category <b>{merchant.breadcrumb1_name ?? "-"}</b></span>
+        {merchant.breadcrumb2_name && (
+          <span className="info-pill">Sub <b>{merchant.breadcrumb2_name}</b></span>
+        )}
+        <span className="info-pill">Reporting <ReportingBadge reporting={merchant.reporting} /></span>
+        <span className="info-pill">Payout <b>{merchant.payout ?? "-"}</b></span>
+        <span className="info-pill">Deal <b>{merchant.deal_type ?? "-"}</b></span>
+        <span className="info-pill">Owner <b>{merchant.owner ?? "-"}</b></span>
+      </div>
+      <div className="info-actions">
+        <button className="btn btn-sm info-edit-btn" onClick={startEdit}>Edit</button>
+      </div>
     </div>
   );
 }
